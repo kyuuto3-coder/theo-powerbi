@@ -212,39 +212,42 @@ function Find-KeyMatches {
             $tb = $Tables[$b]
             foreach ($ca in $ta.Columns) {
                 if ($ca.IsUnique -or $ca.Values.Count -lt 2) { continue }
-                $namesUnrelated = $false
-                $found = New-Object System.Collections.Generic.List[object]   # @{ Line; SameName }
+                $found = New-Object System.Collections.Generic.List[object]   # @{ Line; SameName; Weak }
                 foreach ($cb in $tb.Columns) {
                     if (-not $cb.IsUnique -or $cb.Name -eq '(unnamed)' -or $ca.Name -eq '(unnamed)') { continue }
                     if ((Get-TypeGroup $ca.Type) -ne (Get-TypeGroup $cb.Type)) { continue }
                     $sameName = ((Get-NormalizedName $ca.Name) -eq (Get-NormalizedName $cb.Name))
+                    $reasons = New-Object System.Collections.Generic.List[string]
                     if (-not $sameName) {
-                        # Different names: value overlap alone is weak evidence. Require the fact->dimension shape and id-like names or a non-trivial key,
-                        # and for numeric keys a many-side that spans the key's range (dense 1..N keys "contain" every small integer column).
+                        # Different names: value overlap alone is weak evidence. Hard rules reject; soft rules demote to POSSIBLE with a reason.
                         if ($ca.Values.Count -lt 3) { continue }
                         if ($ta.RowCount -lt $tb.RowCount) { continue }
-                        $namesUnrelated = -not (Test-NameTokensCompatible $ca.Name $cb.Name)
                         if (-not (((Test-IdLikeName $ca.Name) -and (Test-IdLikeName $cb.Name)) -or ($cb.Values.Count -ge 20 -and $ca.Values.Count -ge 5))) { continue }
                         if ((Get-TypeGroup $ca.Type) -eq 'number' -and $null -ne $ca.Min -and $null -ne $cb.Min) {
                             $keyRange = [double]$cb.Max - [double]$cb.Min; $colRange = [double]$ca.Max - [double]$ca.Min
-                            if ($keyRange -gt 0 -and ($colRange / $keyRange) -lt 0.5) { continue }
                             $dense = ($keyRange -gt 0 -and $cb.Values.Count -ge 0.9 * ($keyRange + 1))
-                            if ($dense -and -not (Test-IdLikeName $ca.Name)) { continue }
+                            if ($dense -and -not (Test-IdLikeName $ca.Name)) { continue }   # dense 1..N keys "contain" every small integer column
+                            if ($keyRange -gt 0 -and ($colRange / $keyRange) -lt 0.5) { $reasons.Add(('values cover only {0}% of the key range' -f [int](100 * $colRange / $keyRange))) }
                         }
+                        if (-not (Test-NameTokensCompatible $ca.Name $cb.Name)) { $reasons.Add('names unrelated') }
                     }
                     $pct = Get-Containment -Sample @($ca.Values) -Set $cb.Values
                     if ($pct -ge $MinPercent -or ($sameName -and $pct -ge 50)) {
-                        if (-not $sameName -and $namesUnrelated) {
-                            $weak.Add(("{0}.{1} -> {2}.{3}  ({4}% of {5} sampled values found; names unrelated - confirm with the user)" -f $ta.Name, $ca.Name, $tb.Name, $cb.Name, $pct, $ca.Values.Count)); continue
+                        if ($reasons.Count -gt 0) {
+                            $found.Add(@{ SameName = $false; Weak = $true; Line = ("{0}.{1} -> {2}.{3}  ({4}% of {5} sampled values found; {6} - confirm with the user)" -f $ta.Name, $ca.Name, $tb.Name, $cb.Name, $pct, $ca.Values.Count, ($reasons -join '; ')) })
+                        } else {
+                            $note = if ($sameName) { '' } else { '; names differ' }
+                            $found.Add(@{ SameName = $sameName; Weak = $false; Line = ("{0}.{1} -> {2}.{3}  ({4}% of {5} sampled values found{6})" -f $ta.Name, $ca.Name, $tb.Name, $cb.Name, $pct, $ca.Values.Count, $note) })
                         }
-                        $note = if ($sameName) { '' } else { '; names differ' }
-                        $found.Add(@{ SameName = $sameName; Line = ("{0}.{1} -> {2}.{3}  ({4}% of {5} sampled values found{6})" -f $ta.Name, $ca.Name, $tb.Name, $cb.Name, $pct, $ca.Values.Count, $note) })
                     }
                 }
-                # a column that matches a same-named key elsewhere gets no different-name guesses
+                # a column that matches a same-named key elsewhere gets no different-name guesses (strong or weak)
                 $hasSameNameAnywhere = $false
                 foreach ($tx in $Tables) { if ($tx.Name -eq $ta.Name) { continue }; foreach ($cx in $tx.Columns) { if ($cx.IsUnique -and $cx.Name -ne '(unnamed)' -and (Get-NormalizedName $cx.Name) -eq (Get-NormalizedName $ca.Name)) { $hasSameNameAnywhere = $true } } }
-                foreach ($f in $found) { if ($f.SameName -or -not $hasSameNameAnywhere) { $out.Add($f.Line) } }
+                foreach ($f in $found) {
+                    if (-not $f.SameName -and $hasSameNameAnywhere) { continue }
+                    if ($f.Weak) { $weak.Add($f.Line) } else { $out.Add($f.Line) }
+                }
             }
             if ($null -ne $tb.CompositeKey) {
                 # candidate tuple in A: for each part of B's key, a column of A with the same normalized name, else the best-containment column of the same type group

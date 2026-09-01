@@ -131,5 +131,15 @@ Test-Case 'Find-KeyMatches -IncludeWeak lists value-strong but name-unrelated pa
     $dim  = @{ Name = 'DimEmployee'; Rows = @(); RowCount = 212; CompositeKey = $null; Columns = @( @{ Name = 'Employee Key'; Index = 0; Type = 'int64'; IsUnique = $true; Values = $emp; Min = 1; Max = 212 } ) }
     $r = Find-KeyMatches -Tables @($fact, $dim) -IncludeWeak
     Assert-Equal 0 $r.Strong.Count; Assert-Equal 1 $r.Weak.Count
-    Assert-Match '^FactSale\.Salesperson Key -> DimEmployee\.Employee Key  \(100% of 5 sampled values found; names unrelated' $r.Weak[0]
+    Assert-Match '^FactSale\.Salesperson Key -> DimEmployee\.Employee Key  \(100% of 5 sampled values found; names unrelated - confirm' $r.Weak[0]
+}
+
+Test-Case 'Find-KeyMatches: narrow-range ids are demoted to POSSIBLE with the reason, not dropped' {
+    $emp = New-Object 'System.Collections.Generic.HashSet[string]'; 1..212 | ForEach-Object { [void]$emp.Add([string]$_) }
+    $sp  = New-Object 'System.Collections.Generic.HashSet[string]'; 19..36 | ForEach-Object { [void]$sp.Add([string]$_) }
+    $fact = @{ Name = 'FactSale'; Rows = @(); RowCount = 100000; CompositeKey = $null; Columns = @( @{ Name = 'Salesperson Key'; Index = 0; Type = 'int64'; IsUnique = $false; Values = $sp; Min = 19; Max = 36 } ) }
+    $dim  = @{ Name = 'DimEmployee'; Rows = @(); RowCount = 212; CompositeKey = $null; Columns = @( @{ Name = 'Employee Key'; Index = 0; Type = 'int64'; IsUnique = $true; Values = $emp; Min = 1; Max = 212 } ) }
+    $r = Find-KeyMatches -Tables @($fact, $dim) -IncludeWeak
+    Assert-Equal 0 $r.Strong.Count; Assert-Equal 1 $r.Weak.Count
+    Assert-Match 'values cover only 8% of the key range; names unrelated - confirm with the user' $r.Weak[0]
 }
