@@ -59,6 +59,7 @@ Claude reads `SKILL.md` always, `reference/*.md` only when needed (SKILL.md says
 4. Claude produces `output/<Name>/<Name>.pbip`. Double-click it, click **새로 고침**, then **파일 → 다른 이름으로 저장 → .pbix**.
 5. Iterate with Claude ("2페이지의 차트를 막대로 바꿔줘"). **Finish iterating with Claude before editing in Power BI Desktop** — a rebuild overwrites the generated project.
 6. If Power BI shows an error on open/refresh, paste the error text to Claude.
+7. **Changing the data later.** `rawdata/` is the coworker's own folder — the scripts only read it, never write or delete there, and git ignores it. Replacing a file with a newer version that keeps the **same file name, sheet name and columns** needs no Claude involvement: open the `.pbix`/`.pbip` and click **새로 고침**. Adding files, renaming a file/sheet, or adding/removing columns → tell Claude ("데이터 파일을 바꿨어요"); Claude re-runs the profiler and rebuilds (or edits the spec's `tables[]`). The generated M query keeps only the columns listed in the spec, so extra new columns are ignored until the spec is updated.
 
 ## 4. Claude workflow (SKILL.md)
 
@@ -86,7 +87,7 @@ Token rules (verbatim in SKILL.md):
 - Read `reference/*.md` only when the trigger listed in SKILL.md applies.
 - Keep clarifying questions to ≤ 2, and only when truly ambiguous.
 - On a Power BI error pasted by the user, reason from the error text and the spec; do not regenerate from scratch.
-- Never run the profiler more than once per session unless `rawdata/` changed.
+- Never run the profiler more than once per session unless the user says `rawdata/` changed (then re-run it — never guess the new columns).
 
 ## 5. `report-spec.json` contract
 
