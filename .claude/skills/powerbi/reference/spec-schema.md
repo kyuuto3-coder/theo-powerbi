@@ -16,7 +16,7 @@ One JSON file per report at `output/<Name>/report-spec.json`. The builder valida
     "delimiter": ",",               // csv only
     "columns*": [{                  // ONLY listed columns are loaded; list the ones the report needs
       "name*": "track_name",        // source header exactly as in the profile
-      "rename": "앱 이름",           // model name (optional)
+      "rename": "App Name",         // English model name (translate Korean headers)
       "type*": "text",              // int64 | double | decimal | text | date | datetime | boolean
       "key": true,                  // unique id column (also sets summarizeBy none)
       "hidden": true,               // hide keys / technical columns
@@ -27,19 +27,19 @@ One JSON file per report at `output/<Name>/report-spec.json`. The builder valida
     }]
   }],
   "relationships": [{ "from*": "Sales.CityKey", "to*": "City.CityKey", "active": true, "crossFilter": "single" }],
-  "measures": [{ "table*": "Sales", "name*": "매출", "dax*": "SUM(Sales[Amount])", "format": "#,0", "description": "" }],
+  "measures": [{ "table*": "Sales", "name*": "Revenue", "dax*": "SUM(Sales[Amount])", "format": "#,0", "description": "" }],
   "pages*": [{
-    "name*": "개요",
+    "name*": "Overview",
     "filters": [{ "field": "Sales.Region", "in": ["Seoul", "Busan"] }],
     "visuals*": [{
       "type*": "card",              // see visual-catalog.md
-      "title": "총 매출",
-      "fields": { "Values": ["Sales.매출"] },   // role → list of field refs
+      "title": "Total Revenue",
+      "fields": { "Values": ["Sales.Revenue"] },   // role → list of field refs
       "grid*": [0, 0, 3, 2],        // [col,row,w,h] on a 12x8 grid (1920x1080 page)
-      "sort": { "field": "Sales.매출", "direction": "desc" },
-      "topN": { "n": 10, "by": "Sales.매출" },   // needs a Category (or Rows) field
+      "sort": { "field": "Sales.Revenue", "direction": "desc" },
+      "topN": { "n": 10, "by": "Sales.Revenue" },   // needs a Category (or Rows) field
       "filters": [{ "field": "Sales.Region", "in": ["Seoul"] }],
-      "text": "제목", "fontSize": 24                // textbox only
+      "text": "Title", "fontSize": 24               // textbox only
     }]
   }]
 }

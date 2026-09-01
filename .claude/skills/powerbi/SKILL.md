@@ -7,6 +7,9 @@ description: Build a Power BI Desktop project (.pbip) from the CSV/XLSX files in
 
 You turn `rawdata/*.csv|xlsx` + the user's wishes into `output/<Name>/<Name>.pbip`. Two PowerShell scripts do the heavy lifting; you only read a compact profile and write one small spec. **The user is non-technical and on a limited token budget: follow the token rules exactly.** This skill is written to be followed literally by Claude Sonnet: when a step says run a command, run exactly that command; when it says decide, decide with the defaults given here rather than asking.
 
+## Language rule (hard)
+- **Chat with the user in Korean.** Everything *inside* the report must be **English**: table names, column `rename`s, measure names, page names, visual titles, textbox text, descriptions. Power BI Desktop's UI is English and the files are shared with English-speaking readers. Korean source headers are fine in `columns[].name` (that is the raw header) — give them an English `rename`.
+
 ## Token rules (hard)
 - NEVER open files in `rawdata/`, `output/*/`, or `templates/` with Read/cat/head. Scripts read them.
 - Run the profiler once per session (again only if the user says the data changed).
@@ -23,11 +26,11 @@ You turn `rawdata/*.csv|xlsx` + the user's wishes into `output/<Name>/<Name>.pbi
 2. **UNDERSTAND** — read the user's text; view an attached mockup image once and note: pages, visual types, KPIs, layout (colors are ignored; the theme is fixed). Map their words to columns from the profile. If a dictionary sheet exists, use its descriptions for column `description` and for choosing Korean names.
 3. **DESIGN** — decide:
    - *Schema:* one table candidate → **flat** (no relationships). Several tables with `KEY MATCHES` → **star**: facts = big tables with numeric measures, dims = tables with a KEY; relationships many→one from fact key to dim key. Independent tables with no matches → separate tables, no relationships.
-   - *Columns:* list only what the report needs + keys. Drop `(unnamed)`/index columns. `hidden: true` for keys. Types from the profile (`decimal` for money, `double` for ratios/ratings). Korean `rename` for user-facing columns when the data is Korean-audience.
-   - *Measures:* 4–10. Always a count (`COUNTROWS`) and totals/averages of the main numeric columns; add ratio measures where sensible. Korean names unless data is English. Trigger → read `reference/dax-patterns.md` only for time intelligence / ranking / running totals.
+   - *Columns:* list only what the report needs + keys. Drop `(unnamed)`/index columns. `hidden: true` for keys. Types from the profile (`decimal` for money, `double` for ratios/ratings). English `rename` for every user-facing column (translate Korean headers, e.g. `매출액` → `Revenue`).
+   - *Measures:* 4–10. Always a count (`COUNTROWS`) and totals/averages of the main numeric columns; add ratio measures where sensible. English names always (`App Count`, `Avg Rating`, `Total Revenue`). Trigger → read `reference/dax-patterns.md` only for time intelligence / ranking / running totals.
    - *Pages/visuals:* 1–4 pages, ≤ 8 visuals each, following the mockup if given; otherwise: title textbox, 3–4 KPI cards, 2–3 charts, 1–2 slicers on page 1; details (table/matrix) on page 2. Trigger → read `reference/visual-catalog.md` when unsure which visual or which role names to use.
    - `autoDateTable: true` when any date column exists; then use `Calendar.YearMonth` / `Calendar.Month` / `Calendar.Year` as time axes.
-4. **WRITE** `output/<Name>/report-spec.json` (Name = short English PascalCase). Format in `reference/spec-schema.md` — read it the first time you write a spec in a session (`examples/app-data-spec.json` is a complete flat-table example). Keep ≤ 200 lines.
+4. **WRITE** `output/<Name>/report-spec.json` (Name = short English PascalCase; page names / titles in English). Format in `reference/spec-schema.md` — read it the first time you write a spec in a session (`examples/app-data-spec.json` is a complete flat-table example). Keep ≤ 200 lines.
 5. **BUILD** — run:
    `powershell -NoProfile -ExecutionPolicy Bypass -File .claude/skills/powerbi/scripts/build-pbip.ps1 -Spec "output/<Name>/report-spec.json"`
    `ERROR n:` lines name the spec path (e.g. `pages[0].visuals[2].fields.Y[0]`) → Edit that spot, rebuild. `WARN:` lines are informational. Success prints `BUILT … (tables= measures= pages= visuals=)`.
