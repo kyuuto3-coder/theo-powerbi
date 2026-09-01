@@ -99,6 +99,14 @@ function Get-GridProfile {
 function Add-TableLines {
     param($T, [string]$ColPrefixMode)   # 'letters' for xlsx, 'index' for csv
     $script:LastHadKey = $false
+    # table-level dirt first, so column notes can explain near-unique ids
+    $blank = 0; $dups = 0
+    $seenRows = New-Object 'System.Collections.Generic.HashSet[string]'
+    foreach ($row in (Get-DataRows $T)) {
+        $parts = New-Object System.Collections.Generic.List[string]; $allEmpty = $true
+        for ($j = 0; $j -lt $row.Count; $j++) { $s = if ($null -eq $row[$j]) { '' } else { ([string]$row[$j]).Trim() }; if ($s -ne '') { $allEmpty = $false }; $parts.Add($s) }
+        if ($allEmpty) { $blank++ } elseif (-not $seenRows.Add($parts -join '|')) { $dups++ }
+    }
     $lines.Add(("    {0,-4} {1,-24} {2,-9} {3,-6} {4,-8} {5,-28} {6}" -f 'col', 'name', 'type', 'nulls', 'distinct', 'sample', 'note'))
     $shown = 0
     $firstUniqueInt = -1   # fallback KEY: a unique integer only when it is the first real column (typical id position)
@@ -113,9 +121,23 @@ function Add-TableLines {
         if ($c.Name -eq '(unnamed)') { $notes.Add('index? drop') }
         elseif ($p.IsUnique -and (($p.Type -in 'int64', 'text' -and ($c.Index -eq $firstUniqueInt -or $c.Name -match '(?i)(^id$|id$|_id|key$|code$|코드$|번호$|키$|no$)')) -or $p.Type -eq 'date')) {
             if ($T.SampleRows -ge $T.DataRows) { $notes.Add('KEY') } else { $notes.Add('KEY?') } }
+        elseif (-not $p.IsUnique -and $dups -gt 0 -and $p.NonEmpty -gt 0 -and $p.Distinct -eq ($p.NonEmpty - $dups)) {
+            $notes.Add('KEY after dedupe (shortfall = exact duplicate rows -> clean.dropDuplicates restores uniqueness)') }
+        elseif (-not $p.IsUnique -and $p.NonEmpty -gt 0 -and $c.Name -match '(?i)(^id$|id$|_id|key$|code$|코드$|번호$|키$|no$)' -and $p.Distinct -lt ($p.NonEmpty - $dups) -and $p.Distinct -ge 0.9 * $p.NonEmpty) {
+            $notes.Add(('CONFLICTING dup ids: {0} -> resolve with clean.dedupeBy (keep first|last|mostComplete), NOT blind dropDuplicates' -f ($p.NonEmpty - $dups - $p.Distinct))) }
+        if ($p.OffType -gt 0) { $notes.Add(("DIRTY: {0} non-{1} e.g. {2} -> clean or they become load errors" -f $p.OffType, $p.Type, ((@($p.OffTypeExamples) | ForEach-Object { '"' + (Format-Cell $_) + '"' }) -join ' '))) }
+        if ($p.Placeholders.Count -gt 0) { $notes.Add('placeholders: ' + (@($p.Placeholders.GetEnumerator() | Sort-Object -Property Value -Descending | ForEach-Object { '"' + $_.Key + '"x' + $_.Value }) -join ' ')) }
+        if ($p.Whitespace -gt 0) { $notes.Add('whitespace: ' + $p.Whitespace) }
+        if ($p.CaseVariants -gt 0) { $notes.Add('case-variants: ' + $p.CaseVariants) }
         $sample = (@($p.Samples | ForEach-Object { if ($p.Type -eq 'text') { '"' + (Format-Cell $_) + '"' } else { Format-Cell $_ } }) -join ', ')
         $lines.Add(("    {0,-4} {1,-24} {2,-9} {3,-6} {4,-8} {5,-28} {6}" -f $colLabel, (Format-Cell $c.Name), $p.Type, ("{0}%" -f $p.NullPct), $p.Distinct, $sample, ($notes -join ' ')))
         if ($notes -contains 'KEY' -or $notes -contains 'KEY?') { $script:LastHadKey = $true }
+    }
+    if ($blank -gt 0 -or $dups -gt 0) {
+        $d = New-Object System.Collections.Generic.List[string]
+        if ($blank -gt 0) { $d.Add("$blank blank row(s) -> clean.removeBlankRows") }
+        if ($dups -gt 0) { $d.Add("$dups duplicate row(s) -> clean.dropDuplicates") }
+        $lines.Add('    DIRT: ' + ($d -join '; ') + ' (in sample)')
     }
 }
 

@@ -55,11 +55,16 @@ function Get-ColumnProfile {
     $samples = New-Object System.Collections.Generic.List[string]
     $allInt = $true; $maxDecimals = 0; $hasTime = $false
     $minN = $null; $maxN = $null; $minD = $null; $maxD = $null
+    # dirt tracking: placeholder tokens, stray whitespace, case-variant duplicates, per-kind examples for off-type reporting
+    $placeholders = @{}; $wsCount = 0
+    $txtLower = New-Object 'System.Collections.Generic.HashSet[string]'; $txtSet = New-Object 'System.Collections.Generic.HashSet[string]'
+    $kindExamples = @{ number = (New-Object System.Collections.Generic.List[string]); date = (New-Object System.Collections.Generic.List[string]); bool = (New-Object System.Collections.Generic.List[string]); text = (New-Object System.Collections.Generic.List[string]) }
     for ($i = 0; $i -lt $n; $i++) {
         $v = $Values[$i]
         $k = Get-ValueKind $v
         $counts[$k]++
         if ($k -eq 'empty') { continue }
+        if ($v -is [string] -and $v -cne $v.Trim()) { $wsCount++ }
         $str = $null
         switch ($k) {
             'number' {
@@ -77,8 +82,14 @@ function Get-ColumnProfile {
                 if ($null -eq $maxD -or $dt -gt $maxD) { $maxD = $dt }
                 $str = $dt.ToString('yyyy-MM-dd')
             }
-            default { $str = ([string]$v).Trim() }
+            default {
+                $str = ([string]$v).Trim()
+                $low = $str.ToLowerInvariant()
+                if ($low -in 'tbd', 'n/a', 'na', 'null', 'unknown', 'undefined', 'none', '-', '?', 'not supplied', 'missing', '#n/a') { if ($placeholders.ContainsKey($str)) { $placeholders[$str]++ } else { $placeholders[$str] = 1 } }
+                [void]$txtSet.Add($str); [void]$txtLower.Add($low)
+            }
         }
+        if ($kindExamples[$k].Count -lt 3 -and -not $kindExamples[$k].Contains($str)) { $kindExamples[$k].Add($str) }
         if ($distinct.Add($str) -and $samples.Count -lt 2) { $samples.Add($str) }
     }
     $nonEmpty = $n - $counts.empty
@@ -92,8 +103,17 @@ function Get-ColumnProfile {
     if ($type -in 'int64', 'decimal', 'double') { $min = $minN; $max = $maxN }
     elseif ($type -in 'date', 'datetime') { if ($minD) { $min = $minD.ToString('yyyy-MM-dd'); $max = $maxD.ToString('yyyy-MM-dd') } }
     $nullPct = if ($n -gt 0) { [int][Math]::Round(100.0 * $counts.empty / $n) } else { 0 }
+    # off-type values: how many sampled values do NOT parse as the inferred type (they will become load errors)
+    $domKind = if ($type -in 'int64', 'decimal', 'double') { 'number' } elseif ($type -in 'date', 'datetime') { 'date' } elseif ($type -eq 'boolean') { 'bool' } else { $null }
+    $offType = 0; $offExamples = @()
+    if ($domKind) {
+        $offType = $nonEmpty - $counts[$domKind]
+        $offExamples = @(); foreach ($ok in 'text', 'number', 'date', 'bool') { if ($ok -ne $domKind) { $offExamples += @($kindExamples[$ok]) } }
+        $offExamples = @($offExamples | Select-Object -First 3)
+    }
     return @{ Type = $type; NullPct = $nullPct; Distinct = $distinct.Count; Samples = $samples.ToArray(); Min = $min; Max = $max
-              IsUnique = ($nonEmpty -gt 0 -and $counts.empty -eq 0 -and $distinct.Count -eq $nonEmpty); NonEmpty = $nonEmpty; Values = $distinct }
+              IsUnique = ($nonEmpty -gt 0 -and $counts.empty -eq 0 -and $distinct.Count -eq $nonEmpty); NonEmpty = $nonEmpty; Values = $distinct
+              OffType = $offType; OffTypeExamples = $offExamples; Placeholders = $placeholders; Whitespace = $wsCount; CaseVariants = ($txtSet.Count - $txtLower.Count) }
 }
 
 function Test-DictionarySheet {
@@ -232,10 +252,18 @@ function Find-KeyMatches {
                         if (-not (Test-NameTokensCompatible $ca.Name $cb.Name)) { $reasons.Add('names unrelated') }
                     }
                     $pct = Get-Containment -Sample @($ca.Values) -Set $cb.Values
+                    $normNote = ''
+                    if ($pct -lt $MinPercent -and (Get-TypeGroup $ca.Type) -eq 'text') {
+                        # retry case-insensitively: dirty codes ("prt" vs "PRT") often hide a real key match
+                        $nset = New-Object 'System.Collections.Generic.HashSet[string]'
+                        foreach ($kv in $cb.Values) { [void]$nset.Add($kv.ToUpperInvariant()) }
+                        $pct2 = Get-Containment -Sample @($ca.Values | ForEach-Object { $_.ToUpperInvariant() }) -Set $nset
+                        if ($pct2 -gt $pct) { $pct = $pct2; $normNote = '; case-insensitive - clean both columns with trim+case:upper' }
+                    }
                     if (-not ($pct -ge $MinPercent -or ($sameName -and $pct -ge 50))) { continue }
                     $weak = ($reasons.Count -gt 0)
                     $line = if ($weak) { "{0}.{1} -> {2}.{3}  ({4}% of {5} sampled values found; {6} - confirm with the user)" -f $ta.Name, $ca.Name, $tb.Name, $cb.Name, $pct, $ca.Values.Count, ($reasons -join '; ') }
-                            else { "{0}.{1} -> {2}.{3}  ({4}% of {5} sampled values found{6})" -f $ta.Name, $ca.Name, $tb.Name, $cb.Name, $pct, $ca.Values.Count, $(if ($sameName) { '' } else { '; names differ' }) }
+                            else { "{0}.{1} -> {2}.{3}  ({4}% of {5} sampled values found{6}{7})" -f $ta.Name, $ca.Name, $tb.Name, $cb.Name, $pct, $ca.Values.Count, $(if ($sameName) { '' } else { '; names differ' }), $normNote }
                     $records.Add(@{ TableA = $ta.Name; ColA = $ca.Name; TableB = $tb.Name; RowsA = $ta.RowCount; RowsB = $tb.RowCount; SameName = $sameName; Weak = $weak; Coverage = $coverage; Line = $line })
                 }
             }
