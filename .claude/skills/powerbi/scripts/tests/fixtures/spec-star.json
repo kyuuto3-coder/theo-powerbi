@@ -1,0 +1,22 @@
+{
+  "name": "SalesStar",
+  "locale": "ko-KR",
+  "autoDateTable": true,
+  "tables": [
+    { "name": "Sales", "file": "sales_cp949.csv", "encoding": 949, "delimiter": ",",
+      "columns": [
+        { "name": "주문일", "type": "date" }, { "name": "지역코드", "type": "int64", "hidden": true },
+        { "name": "제품", "type": "text" }, { "name": "수량", "type": "int64" }, { "name": "매출액", "type": "decimal", "format": "#,0" } ] },
+    { "name": "Regions", "file": "regions.csv", "encoding": 65001,
+      "columns": [ { "name": "지역코드", "type": "int64", "key": true, "hidden": true }, { "name": "지역명", "type": "text" }, { "name": "권역", "type": "text" } ] }
+  ],
+  "relationships": [ { "from": "Sales.지역코드", "to": "Regions.지역코드" } ],
+  "measures": [
+    { "table": "Sales", "name": "총 매출", "dax": "SUM(Sales[매출액])", "format": "#,0" },
+    { "table": "Sales", "name": "총 수량", "dax": "SUM(Sales[수량])", "format": "#,0" }
+  ],
+  "pages": [ { "name": "매출", "visuals": [
+    { "type": "card", "fields": { "Values": ["Sales.총 매출"] }, "grid": [0, 0, 3, 2] },
+    { "type": "clusteredColumnChart", "fields": { "Category": ["Regions.권역"], "Y": ["Sales.총 매출"], "Series": ["Sales.제품"] }, "grid": [3, 0, 9, 4] },
+    { "type": "areaChart", "fields": { "Category": ["Calendar.Month"], "Y": ["Sales.총 수량"] }, "grid": [0, 4, 12, 4] } ] } ]
+}

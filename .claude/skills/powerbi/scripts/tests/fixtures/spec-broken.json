@@ -1,0 +1,9 @@
+{
+  "name": "Broken",
+  "tables": [ { "name": "Apps", "file": "apps.xlsx", "sheet": "Data",
+    "columns": [ { "name": "id", "type": "int64" }, { "name": "price", "type": "money" } ] } ],
+  "measures": [ { "table": "Apps", "name": "앱 수", "dax": "COUNTROWS(Apps)" } ],
+  "pages": [ { "name": "p", "visuals": [
+    { "type": "card", "fields": { "Values": ["Apps.nope"] }, "grid": [0, 0, 3, 2] },
+    { "type": "lineChart", "fields": { "Category": ["Apps.id"], "Y": ["Apps.앱 수"], "Bogus": ["Apps.id"] }, "grid": [0, 2, 6, 3] } ] } ]
+}

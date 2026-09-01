@@ -1,0 +1,53 @@
+{
+  "name": "AppsFlat",
+  "locale": "ko-KR",
+  "autoDateTable": true,
+  "tables": [
+    {
+      "name": "Apps",
+      "file": "apps.xlsx",
+      "sheet": "Data",
+      "headerRow": 1,
+      "columns": [
+        { "name": "id", "type": "int64", "key": true, "hidden": true, "description": "App ID" },
+        { "name": "track_name", "rename": "앱 이름", "type": "text", "description": "Track Name" },
+        { "name": "size_bytes", "type": "int64", "format": "#,0" },
+        { "name": "price", "type": "decimal", "format": "$#,0.00" },
+        { "name": "rating_count_tot", "type": "int64" },
+        { "name": "user_rating", "type": "double", "summarizeBy": "average", "format": "0.0" },
+        { "name": "prime_genre", "rename": "장르", "type": "text" },
+        { "name": "release_date", "rename": "출시일", "type": "date" }
+      ]
+    }
+  ],
+  "measures": [
+    { "table": "Apps", "name": "앱 수", "dax": "COUNTROWS(Apps)", "format": "#,0" },
+    { "table": "Apps", "name": "평균 평점", "dax": "AVERAGE(Apps[user_rating])", "format": "0.00" },
+    { "table": "Apps", "name": "평균 가격", "dax": "AVERAGE(Apps[price])", "format": "$#,0.00" }
+  ],
+  "pages": [
+    {
+      "name": "개요",
+      "visuals": [
+        { "type": "textbox", "text": "앱스토어 대시보드", "grid": [0, 0, 12, 1], "fontSize": 24 },
+        { "type": "card", "title": "앱 수", "fields": { "Values": ["Apps.앱 수"] }, "grid": [0, 1, 3, 2] },
+        { "type": "card", "title": "평균 평점", "fields": { "Values": ["Apps.평균 평점"] }, "grid": [3, 1, 3, 2] },
+        { "type": "clusteredBarChart", "title": "장르별 앱 수", "fields": { "Category": ["Apps.장르"], "Y": ["Apps.앱 수"] },
+          "sort": { "field": "Apps.앱 수", "direction": "desc" }, "topN": { "n": 3, "by": "Apps.앱 수" }, "grid": [6, 1, 6, 4] },
+        { "type": "lineChart", "title": "월별 출시 앱 수", "fields": { "Category": ["Calendar.YearMonth"], "Y": ["Apps.앱 수"] }, "grid": [0, 3, 6, 3] },
+        { "type": "scatterChart", "title": "가격 vs 평점", "fields": { "Category": ["Apps.앱 이름"], "X": ["avg:Apps.price"], "Y": ["Apps.평균 평점"], "Size": ["sum:Apps.rating_count_tot"] }, "grid": [6, 5, 6, 3] },
+        { "type": "slicer", "fields": { "Values": ["Apps.장르"] }, "grid": [0, 6, 3, 2] },
+        { "type": "tableEx", "title": "상위 앱", "fields": { "Values": ["Apps.앱 이름", "Apps.장르", "Apps.평균 평점"] }, "grid": [3, 6, 3, 2] }
+      ]
+    },
+    {
+      "name": "상세",
+      "filters": [ { "field": "Apps.장르", "in": ["Games", "Education"] } ],
+      "visuals": [
+        { "type": "pivotTable", "fields": { "Rows": ["Apps.장르"], "Columns": ["Calendar.Year"], "Values": ["Apps.앱 수", "Apps.평균 가격"] }, "grid": [0, 0, 12, 4] },
+        { "type": "donutChart", "fields": { "Category": ["Apps.장르"], "Y": ["Apps.앱 수"] }, "grid": [0, 4, 6, 4] },
+        { "type": "gauge", "fields": { "Y": ["Apps.평균 평점"], "MaxValue": ["max:Apps.user_rating"] }, "grid": [6, 4, 6, 4] }
+      ]
+    }
+  ]
+}

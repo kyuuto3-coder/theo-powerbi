@@ -1316,7 +1316,7 @@ Test-Case 'Get-SpecValidation catches missing file, bad grid, duplicate names' {
 }
 Test-Case 'Get-GridPosition converts the 12x8 grid into pixels' {
     $p = Get-GridPosition -Grid @(0, 0, 3, 2)
-    Assert-Equal 40 $p.x; Assert-Equal 40 $p.y; Assert-Equal 425 $p.width; Assert-Equal 235 $p.height
+    Assert-Equal 40 $p.x; Assert-Equal 40 $p.y; Assert-Equal 445 $p.width; Assert-Equal 235 $p.height
     $q = Get-GridPosition -Grid @(6, 1, 6, 4)
     Assert-Equal 970 $q.x; Assert-Equal 168 $q.y; Assert-Equal 910 $q.width; Assert-Equal 490 $q.height
 }
@@ -1919,7 +1919,7 @@ Test-Case 'New-VisualJson: card with title' {
     Assert-Equal 'cardVisual' $j.visual.visualType
     Assert-Equal '앱 수' $j.visual.query.queryState.Data.projections[0].field.Measure.Property
     Assert-Equal "'앱 수'" $j.visual.visualContainerObjects.title[0].properties.text.expr.Literal.Value
-    Assert-Equal 40 $j.position.x; Assert-Equal 168 $j.position.y; Assert-Equal 425 $j.position.width; Assert-Equal 235 $j.position.height; Assert-Equal 1000 $j.position.tabOrder
+    Assert-Equal 40 $j.position.x; Assert-Equal 168 $j.position.y; Assert-Equal 445 $j.position.width; Assert-Equal 235 $j.position.height; Assert-Equal 1000 $j.position.tabOrder
     Assert-True $j.visual.drillFilterOtherVisuals 'drill flag'
 }
 Test-Case 'New-VisualJson: bar chart with sort and TopN filter' {
@@ -2391,7 +2391,7 @@ Test-Case 'New-ManualGuide: report pages with field wells, sort, Top N, size/pos
     Assert-Match '\*\*More options \(…\)\*\* → \*\*Sort axis\*\* → \*\*\[앱 수\]\*\*, \*\*Sort descending\*\*' $g
     Assert-Match '\*\*Filter type: Top N\*\*, \*\*Show items: Top 3\*\*' $g
     Assert-Match '\*\*X Axis\*\* ← \*\*Apps\[price\]\*\* \(필드 드롭다운 ▾ → \*\*Average\*\*\)' $g
-    Assert-Match 'X 40, Y 168, Width 425, Height 235' $g
+    Assert-Match 'X 40, Y 168, Width 445, Height 235' $g
     Assert-Match '### 페이지 2: `상세`' $g
     Assert-Match '\*\*Filters on this page\*\*.*Apps\[장르\].*\*\*Basic filtering\*\* → `Games`, `Education`' $g
     Assert-Match '\*\*Matrix\*\*' $g
@@ -2725,7 +2725,7 @@ One JSON file per report at `output/<Name>/report-spec.json`. The builder valida
 
 **Field refs:** `Table.Name` — the builder checks measures first, then columns (use the *renamed* name). Aggregate a raw column with a prefix: `sum:` `avg:` `min:` `max:` `count:` `countDistinct:` (columns only, never measures). Calendar fields when `autoDateTable` produced one: `Calendar.Date`, `Calendar.Year`, `Calendar.Quarter`, `Calendar.Month`, `Calendar.YearMonth`.
 
-**Grid math:** 12 columns × 8 rows, 40 px margin, 20 px gutter. Common shapes: KPI card `[c,r,3,2]`, half-width chart `[c,r,6,4]`, full-width chart `[0,r,12,4]`, slicer `[c,r,3,2]`, title textbox `[0,0,12,1]`.
+**Grid math:** 12 columns × 8 rows, 40 px margin, 20 px gutter. Common shapes: KPI card `[c,r,3,2]` (445 × 235 px), half-width chart `[c,r,6,4]`, full-width chart `[0,r,12,4]`, slicer `[c,r,3,2]`, title textbox `[0,0,12,1]`.
 
 **DAX inside `dax`:** reference model names: `Sales[매출액]`, `'Table with space'[Col]`, `[OtherMeasure]`. Use `\n` for multi-line.
 ````
