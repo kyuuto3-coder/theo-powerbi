@@ -199,25 +199,24 @@ function Get-Containment {
 }
 
 function Find-KeyMatches {
-    # $Tables: @( @{ Name; Rows (sampled data rows, object[] each); Columns = @( @{ Name; Index; Type; IsUnique; Values (HashSet of key strings) } ); CompositeKey = $null | @{ Indices; Names; Values (HashSet) } } )
-    # Returns strings: "many.col -> one.key  (NN% of M sampled values found[; names differ])"
+    # $Tables: @( @{ Name; RowCount; Rows (sampled data rows); Columns = @( @{ Name; Index; Type; IsUnique; Values (HashSet); Min; Max } ); CompositeKey = $null | @{ Indices; Names; Values } } )
+    # Returns strings "many.col -> one.key  (NN% of M sampled values found[; names differ])". With -IncludeWeak returns @{ Strong; Weak } where Weak are
+    # value-supported guesses that failed a soft rule (narrow range / unrelated names) and must be confirmed by the user.
     param([Parameter(Mandatory)]$Tables, [int]$MinPercent = 90, [switch]$IncludeWeak)
-    # -IncludeWeak: also return @{ Strong = @(...); Weak = @(...) } where Weak = value evidence ok but the names are unrelated (ask the user)
-    $out = New-Object System.Collections.Generic.List[string]
-    $weak = New-Object System.Collections.Generic.List[string]
+    $records = New-Object System.Collections.Generic.List[object]
+    $composites = New-Object System.Collections.Generic.List[string]
     for ($a = 0; $a -lt $Tables.Count; $a++) {
         $ta = $Tables[$a]
         for ($b = 0; $b -lt $Tables.Count; $b++) {
             if ($a -eq $b) { continue }
             $tb = $Tables[$b]
             foreach ($ca in $ta.Columns) {
-                if ($ca.IsUnique -or $ca.Values.Count -lt 2) { continue }
-                $found = New-Object System.Collections.Generic.List[object]   # @{ Line; SameName; Weak }
+                if ($ca.IsUnique -or $ca.Values.Count -lt 2 -or $ca.Name -eq '(unnamed)') { continue }
                 foreach ($cb in $tb.Columns) {
-                    if (-not $cb.IsUnique -or $cb.Name -eq '(unnamed)' -or $ca.Name -eq '(unnamed)') { continue }
+                    if (-not $cb.IsUnique -or $cb.Name -eq '(unnamed)') { continue }
                     if ((Get-TypeGroup $ca.Type) -ne (Get-TypeGroup $cb.Type)) { continue }
                     $sameName = ((Get-NormalizedName $ca.Name) -eq (Get-NormalizedName $cb.Name))
-                    $reasons = New-Object System.Collections.Generic.List[string]
+                    $reasons = New-Object System.Collections.Generic.List[string]; $coverage = 100
                     if (-not $sameName) {
                         # Different names: value overlap alone is weak evidence. Hard rules reject; soft rules demote to POSSIBLE with a reason.
                         if ($ca.Values.Count -lt 3) { continue }
@@ -227,30 +226,20 @@ function Find-KeyMatches {
                             $keyRange = [double]$cb.Max - [double]$cb.Min; $colRange = [double]$ca.Max - [double]$ca.Min
                             $dense = ($keyRange -gt 0 -and $cb.Values.Count -ge 0.9 * ($keyRange + 1))
                             if ($dense -and -not (Test-IdLikeName $ca.Name)) { continue }   # dense 1..N keys "contain" every small integer column
-                            if ($keyRange -gt 0 -and ($colRange / $keyRange) -lt 0.5) { $reasons.Add(('values cover only {0}% of the key range' -f [int](100 * $colRange / $keyRange))) }
+                            if ($keyRange -gt 0) { $coverage = [int](100 * $colRange / $keyRange) }
+                            if ($coverage -lt 50) { $reasons.Add(('values cover only {0}% of the key range' -f $coverage)) }
                         }
                         if (-not (Test-NameTokensCompatible $ca.Name $cb.Name)) { $reasons.Add('names unrelated') }
                     }
                     $pct = Get-Containment -Sample @($ca.Values) -Set $cb.Values
-                    if ($pct -ge $MinPercent -or ($sameName -and $pct -ge 50)) {
-                        if ($reasons.Count -gt 0) {
-                            $found.Add(@{ SameName = $false; Weak = $true; Line = ("{0}.{1} -> {2}.{3}  ({4}% of {5} sampled values found; {6} - confirm with the user)" -f $ta.Name, $ca.Name, $tb.Name, $cb.Name, $pct, $ca.Values.Count, ($reasons -join '; ')) })
-                        } else {
-                            $note = if ($sameName) { '' } else { '; names differ' }
-                            $found.Add(@{ SameName = $sameName; Weak = $false; Line = ("{0}.{1} -> {2}.{3}  ({4}% of {5} sampled values found{6})" -f $ta.Name, $ca.Name, $tb.Name, $cb.Name, $pct, $ca.Values.Count, $note) })
-                        }
-                    }
-                }
-                # a column that matches a same-named key elsewhere gets no different-name guesses (strong or weak)
-                $hasSameNameAnywhere = $false
-                foreach ($tx in $Tables) { if ($tx.Name -eq $ta.Name) { continue }; foreach ($cx in $tx.Columns) { if ($cx.IsUnique -and $cx.Name -ne '(unnamed)' -and (Get-NormalizedName $cx.Name) -eq (Get-NormalizedName $ca.Name)) { $hasSameNameAnywhere = $true } } }
-                foreach ($f in $found) {
-                    if (-not $f.SameName -and $hasSameNameAnywhere) { continue }
-                    if ($f.Weak) { $weak.Add($f.Line) } else { $out.Add($f.Line) }
+                    if (-not ($pct -ge $MinPercent -or ($sameName -and $pct -ge 50))) { continue }
+                    $weak = ($reasons.Count -gt 0)
+                    $line = if ($weak) { "{0}.{1} -> {2}.{3}  ({4}% of {5} sampled values found; {6} - confirm with the user)" -f $ta.Name, $ca.Name, $tb.Name, $cb.Name, $pct, $ca.Values.Count, ($reasons -join '; ') }
+                            else { "{0}.{1} -> {2}.{3}  ({4}% of {5} sampled values found{6})" -f $ta.Name, $ca.Name, $tb.Name, $cb.Name, $pct, $ca.Values.Count, $(if ($sameName) { '' } else { '; names differ' }) }
+                    $records.Add(@{ TableA = $ta.Name; ColA = $ca.Name; TableB = $tb.Name; RowsA = $ta.RowCount; RowsB = $tb.RowCount; SameName = $sameName; Weak = $weak; Coverage = $coverage; Line = $line })
                 }
             }
             if ($null -ne $tb.CompositeKey) {
-                # candidate tuple in A: for each part of B's key, a column of A with the same normalized name, else the best-containment column of the same type group
                 $idx = New-Object System.Collections.Generic.List[int]; $names = New-Object System.Collections.Generic.List[string]; $ok = $true
                 for ($p = 0; $p -lt $tb.CompositeKey.Names.Count; $p++) {
                     $partName = $tb.CompositeKey.Names[$p]; $partCol = $tb.Columns | Where-Object { $_.Name -eq $partName } | Select-Object -First 1
@@ -266,15 +255,25 @@ function Find-KeyMatches {
                 if ($ok) {
                     $tuples = Get-TupleStrings -Rows $ta.Rows -Indices $idx.ToArray()
                     $pct = Get-Containment -Sample $tuples -Set $tb.CompositeKey.Values
-                    if ($pct -ge $MinPercent) {
-                        $out.Add(("{0}.({1}) -> {2}.({3})  ({4}% of {5} sampled rows found; composite key)" -f $ta.Name, ($names -join '+'), $tb.Name, ($tb.CompositeKey.Names -join '+'), $pct, $tuples.Count))
-                    }
+                    if ($pct -ge $MinPercent) { $composites.Add(("{0}.({1}) -> {2}.({3})  ({4}% of {5} sampled rows found; composite key)" -f $ta.Name, ($names -join '+'), $tb.Name, ($tb.CompositeKey.Names -join '+'), $pct, $tuples.Count)) }
                 }
             }
         }
     }
-    if ($IncludeWeak) { return @{ Strong = $out.ToArray(); Weak = $weak.ToArray() } }
-    return $out.ToArray()
+    # --- post filters
+    # 1) a column that matches a same-named key somewhere gets no different-name guesses
+    $sameNameCols = @{}; foreach ($r in $records) { if ($r.SameName) { $sameNameCols[$r.TableA + '|' + $r.ColA] = $true } }
+    $records = @($records | Where-Object { $_.SameName -or -not $sameNameCols.ContainsKey($_.TableA + '|' + $_.ColA) })
+    # 2) a column with a strong match gets no weak guesses; weak guesses only from fact-like tables (have a strong match, >= 2x the key table), coverage >= 10%, top 2 per column
+    $strongCols = @{}; $strongTables = @{}
+    foreach ($r in $records) { if (-not $r.Weak) { $strongCols[$r.TableA + '|' + $r.ColA] = $true; $strongTables[$r.TableA] = $true } }
+    $strong = @($records | Where-Object { -not $_.Weak } | ForEach-Object { $_.Line })
+    $weakRecs = @($records | Where-Object { $_.Weak -and -not $strongCols.ContainsKey($_.TableA + '|' + $_.ColA) -and $strongTables.ContainsKey($_.TableA) -and $_.RowsA -ge 2 * $_.RowsB -and $_.Coverage -ge 10 })
+    $weak = New-Object System.Collections.Generic.List[string]
+    foreach ($grp in ($weakRecs | Group-Object { $_.TableA + '|' + $_.ColA })) { foreach ($r in ($grp.Group | Sort-Object { -$_.Coverage } | Select-Object -First 2)) { $weak.Add($r.Line) } }
+    $out = @($strong) + @($composites)
+    if ($IncludeWeak) { return @{ Strong = $out; Weak = $weak.ToArray() } }
+    return $out
 }
 
 function Find-SameStructureGroups {

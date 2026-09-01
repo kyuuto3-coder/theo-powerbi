@@ -127,19 +127,23 @@ Test-Case 'Test-NameTokensCompatible judges subject words, not id/key noise, and
 Test-Case 'Find-KeyMatches -IncludeWeak lists value-strong but name-unrelated pairs separately' {
     $emp = New-Object 'System.Collections.Generic.HashSet[string]'; 1..212 | ForEach-Object { [void]$emp.Add([string]$_) }
     $sp  = New-Object 'System.Collections.Generic.HashSet[string]'; 5, 60, 120, 180, 200 | ForEach-Object { [void]$sp.Add([string]$_) }
-    $fact = @{ Name = 'FactSale'; Rows = @(); RowCount = 100000; CompositeKey = $null; Columns = @( @{ Name = 'Salesperson Key'; Index = 0; Type = 'int64'; IsUnique = $false; Values = $sp; Min = 5; Max = 200 } ) }
+    $ck = New-Object 'System.Collections.Generic.HashSet[string]'; 1..50 | ForEach-Object { [void]$ck.Add([string]$_) }
+    $fact = @{ Name = 'FactSale'; Rows = @(); RowCount = 100000; CompositeKey = $null; Columns = @( @{ Name = 'Salesperson Key'; Index = 0; Type = 'int64'; IsUnique = $false; Values = $sp; Min = 5; Max = 200 }, @{ Name = 'Customer Key'; Index = 1; Type = 'int64'; IsUnique = $false; Values = $ck; Min = 1; Max = 50 } ) }
     $dim  = @{ Name = 'DimEmployee'; Rows = @(); RowCount = 212; CompositeKey = $null; Columns = @( @{ Name = 'Employee Key'; Index = 0; Type = 'int64'; IsUnique = $true; Values = $emp; Min = 1; Max = 212 } ) }
-    $r = Find-KeyMatches -Tables @($fact, $dim) -IncludeWeak
-    Assert-Equal 0 $r.Strong.Count; Assert-Equal 1 $r.Weak.Count
+    $cust = @{ Name = 'DimCustomer'; Rows = @(); RowCount = 50; CompositeKey = $null; Columns = @( @{ Name = 'Customer Key'; Index = 0; Type = 'int64'; IsUnique = $true; Values = $ck; Min = 1; Max = 50 } ) }
+    $r = Find-KeyMatches -Tables @($fact, $dim, $cust) -IncludeWeak
+    Assert-Equal 1 $r.Strong.Count; Assert-Equal 1 $r.Weak.Count ($r.Weak -join ' | ')
     Assert-Match '^FactSale\.Salesperson Key -> DimEmployee\.Employee Key  \(100% of 5 sampled values found; names unrelated - confirm' $r.Weak[0]
 }
 
 Test-Case 'Find-KeyMatches: narrow-range ids are demoted to POSSIBLE with the reason, not dropped' {
     $emp = New-Object 'System.Collections.Generic.HashSet[string]'; 1..212 | ForEach-Object { [void]$emp.Add([string]$_) }
     $sp  = New-Object 'System.Collections.Generic.HashSet[string]'; 19..36 | ForEach-Object { [void]$sp.Add([string]$_) }
-    $fact = @{ Name = 'FactSale'; Rows = @(); RowCount = 100000; CompositeKey = $null; Columns = @( @{ Name = 'Salesperson Key'; Index = 0; Type = 'int64'; IsUnique = $false; Values = $sp; Min = 19; Max = 36 } ) }
+    $ck = New-Object 'System.Collections.Generic.HashSet[string]'; 1..50 | ForEach-Object { [void]$ck.Add([string]$_) }
+    $fact = @{ Name = 'FactSale'; Rows = @(); RowCount = 100000; CompositeKey = $null; Columns = @( @{ Name = 'Salesperson Key'; Index = 0; Type = 'int64'; IsUnique = $false; Values = $sp; Min = 19; Max = 60 }, @{ Name = 'Customer Key'; Index = 1; Type = 'int64'; IsUnique = $false; Values = $ck; Min = 1; Max = 50 } ) }
     $dim  = @{ Name = 'DimEmployee'; Rows = @(); RowCount = 212; CompositeKey = $null; Columns = @( @{ Name = 'Employee Key'; Index = 0; Type = 'int64'; IsUnique = $true; Values = $emp; Min = 1; Max = 212 } ) }
-    $r = Find-KeyMatches -Tables @($fact, $dim) -IncludeWeak
-    Assert-Equal 0 $r.Strong.Count; Assert-Equal 1 $r.Weak.Count
-    Assert-Match 'values cover only 8% of the key range; names unrelated - confirm with the user' $r.Weak[0]
+    $cust = @{ Name = 'DimCustomer'; Rows = @(); RowCount = 50; CompositeKey = $null; Columns = @( @{ Name = 'Customer Key'; Index = 0; Type = 'int64'; IsUnique = $true; Values = $ck; Min = 1; Max = 50 } ) }
+    $r = Find-KeyMatches -Tables @($fact, $dim, $cust) -IncludeWeak
+    Assert-Equal 1 $r.Strong.Count; Assert-Equal 1 $r.Weak.Count ($r.Weak -join ' | ')
+    Assert-Match 'values cover only 19% of the key range; names unrelated - confirm with the user' $r.Weak[0]
 }
