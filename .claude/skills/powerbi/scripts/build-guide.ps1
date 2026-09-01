@@ -18,7 +18,10 @@ $specObj = Read-Spec -Path $specPath
 $v = Get-SpecValidation -Spec $specObj -RawDataDir $RawData
 if ($v.Errors.Count -gt 0) { $i = 0; foreach ($e in $v.Errors) { $i++; Write-Output ("ERROR {0}: {1}" -f $i, $e) }; exit 1 }
 $absRaw = (Get-Item -LiteralPath $RawData).FullName
-$out = Join-Path (Split-Path -Parent $specPath) 'manual-guide.md'
-Write-Utf8File -Path $out -Content (New-ManualGuide -Model $v.Model -RawDataDir $absRaw)
-Write-Output ("GUIDE {0}" -f $out)
+$dir = Split-Path -Parent $specPath
+$outMd = Join-Path $dir 'manual-guide.md'; $outHtml = Join-Path $dir 'manual-guide.html'
+Write-Utf8File -Path $outMd -Content (New-ManualGuide -Model $v.Model -RawDataDir $absRaw)
+Write-Utf8File -Path $outHtml -Content (New-ManualGuideHtml -Model $v.Model -RawDataDir $absRaw)
+Write-Output ("GUIDE {0}" -f $outHtml)
+Write-Output ("GUIDE-MD {0}" -f $outMd)
 exit 0

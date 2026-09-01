@@ -39,7 +39,7 @@ You turn `rawdata/*.csv|xlsx` + the user's wishes into `output/<Name>/<Name>.pbi
    > `output/<Name>/<Name>.pbip` 을 더블클릭해 Power BI Desktop에서 열고 **Refresh**(새로 고침)를 누른 뒤, **File > Save As**로 `.pbix`로 저장하세요. 수정하고 싶은 점을 말씀해 주시면 바로 반영합니다.
 7. **GUIDE?** — ask: "같은 리포트를 Power BI Desktop에서 직접 만드는 방법을 정리한 가이드(manual-guide.md)도 만들어 드릴까요?" If yes, run:
    `powershell -NoProfile -ExecutionPolicy Bypass -File .claude/skills/powerbi/scripts/build-guide.ps1 -Spec "output/<Name>/report-spec.json"`
-   and reply with the path `output/<Name>/manual-guide.md` (Korean prose, English menu names). Do not read the guide.
+   and reply with the path `output/<Name>/manual-guide.html` (더블클릭해 브라우저에서 열기; 단계 체크·수식 복사·배치 그림 포함; `manual-guide.md`는 같은 내용의 텍스트판). Do not read the guide.
 
 ## Iterating
 "X를 바꿔줘" → Edit the spec (visual type / fields / grid / measure / page) → rebuild → one-line Korean confirmation. Remind them once that rebuilding overwrites the generated project, so Desktop-side edits should wait until they are happy.

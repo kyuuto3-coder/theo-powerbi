@@ -251,6 +251,8 @@ Exit code 0 prints one line: `BUILT output/<Name>/<Name>.pbip  (tables=N measure
 
 After the hand-off (workflow step 6) Claude asks, in Korean, whether the coworker also wants a guide for building the same report **by hand** in Power BI Desktop. If yes, Claude runs `build-guide.ps1 -Spec output/<Name>/report-spec.json`, which writes `output/<Name>/manual-guide.md` deterministically from the spec — Claude does not author the guide (zero extra tokens beyond one command and a one-line answer).
 
+The script also writes `manual-guide.html` (self-contained, opens in a browser): per-step checkboxes persisted in localStorage, menu paths as `<kbd>` chips, copy buttons on DAX/M blocks, an SVG minimap of each page's layout from the grid, field-well boxes per visual, collapsible sections, print styles. The `.md` remains as the plain-text twin.
+
 Guide rules:
 
 - **Prose in Korean; every menu, ribbon tab, pane, button, visual name, field-well name, data type and dialog label in strict English**, exactly as Power BI Desktop's English UI shows them (e.g. **Home > Get Data > Excel Workbook**, **Transform Data**, **Use First Row as Headers**, **Choose Columns**, **Close & Apply**, **Model view**, **Manage relationships**, **New measure**, **Mark as date table**, **Visualizations** pane, **Clustered bar chart**, **X-axis / Y-axis / Legend / Values / Rows / Columns / Field / Data**, **Filters** pane → **Top N**, **Format visual > General > Title**).
