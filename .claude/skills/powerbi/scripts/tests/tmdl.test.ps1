@@ -18,6 +18,14 @@ Test-Case 'New-MQuery for xlsx: sheet navigation, select, rename, types' {
     Assert-Match 'Typed = Table\.TransformColumnTypes\(Renamed, \{\{"id", Int64\.Type\}, \{"앱 이름", type text\}, \{"size_bytes", Int64\.Type\}, \{"price", Currency\.Type\}, \{"rating_count_tot", Int64\.Type\}, \{"user_rating", type number\}, \{"장르", type text\}, \{"출시일", type date\}\}\)' $q
     Assert-True (-not $q.Contains('Skipped')) 'headerRow 1 → no skip'
 }
+Test-Case 'New-MQuery emits case-only renames (M is case-sensitive)' {
+    $m = Get-SpecModel -Spec (Read-Spec -Path (Join-Path $fixtures 'spec-flat.json'))
+    $t = $m.Tables['Apps']
+    @($t.Columns | Where-Object { $_.Source -eq 'price' }) | ForEach-Object { $_.Name = 'Price' }
+    $q = (New-MQuery -Table $t) -join "`n"
+    Assert-Match '\{"price", "Price"\}' $q
+    Assert-Match 'Table\.TransformColumnTypes\(Renamed, .*\{"Price", Currency\.Type\}' $q
+}
 Test-Case 'New-MQuery for csv: encoding, delimiter, header skip, no rename step' {
     $m = Get-SpecModel -Spec (Read-Spec -Path (Join-Path $fixtures 'spec-star.json'))
     $t = $m.Tables['Sales']; $t.HeaderRow = 3

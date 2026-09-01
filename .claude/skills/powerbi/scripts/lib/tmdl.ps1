@@ -34,7 +34,8 @@ function New-MQuery {
     $sel = @($Table.Columns | ForEach-Object { ConvertTo-MString $_.Source }) -join ', '
     $l.Add('    Selected = Table.SelectColumns(Promoted, {' + $sel + '}),')
     $prev = 'Selected'
-    $renames = @($Table.Columns | Where-Object { $_.Source -ne $_.Name } | ForEach-Object { '{' + (ConvertTo-MString $_.Source) + ', ' + (ConvertTo-MString $_.Name) + '}' })
+    # -cne: M is case-sensitive, so a case-only rename (price -> Price) must still be emitted
+    $renames = @($Table.Columns | Where-Object { $_.Source -cne $_.Name } | ForEach-Object { '{' + (ConvertTo-MString $_.Source) + ', ' + (ConvertTo-MString $_.Name) + '}' })
     if ($renames.Count -gt 0) { $l.Add('    Renamed = Table.RenameColumns(Selected, {' + ($renames -join ', ') + '}),'); $prev = 'Renamed' }
     $types = @($Table.Columns | ForEach-Object { '{' + (ConvertTo-MString $_.Name) + ', ' + (Get-MType $_.Type) + '}' }) -join ', '
     $l.Add('    Typed = Table.TransformColumnTypes(' + $prev + ', {' + $types + '})')

@@ -63,7 +63,7 @@ function New-ManualGuide {
         if ($t.HeaderRow -gt 1) { $l.Add("   - **Home > Remove Rows > Remove Top Rows** → **Number of rows: $($t.HeaderRow - 1)** → **OK**") }
         $l.Add('   - **Home > Use First Row as Headers** (첫 행이 이미 헤더면 생략)')
         $l.Add('   - **Home > Choose Columns** → 다음 열만 체크: ' + (@($t.Columns | ForEach-Object { '`' + $_.Source + '`' }) -join ', '))
-        $renames = @($t.Columns | Where-Object { $_.Source -ne $_.Name })
+        $renames = @($t.Columns | Where-Object { $_.Source -cne $_.Name })
         if ($renames.Count -gt 0) { $l.Add('   - 열 이름 변경(열 헤더 더블클릭): ' + (@($renames | ForEach-Object { '`' + $_.Source + '` → `' + $_.Name + '`' }) -join ', ')) }
         $l.Add('   - 데이터 형식(열 헤더 왼쪽의 형식 아이콘 클릭): ' + (@($t.Columns | ForEach-Object { '`' + $_.Name + '` → **' + $script:PqTypeNames[$_.Type] + '**' }) -join ', '))
         $l.Add('')
