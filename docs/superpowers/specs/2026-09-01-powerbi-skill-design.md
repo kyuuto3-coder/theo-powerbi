@@ -256,3 +256,8 @@ Maps and custom visuals; bookmarks, drillthrough, tooltips pages; row-level secu
 ## 12. Distribution
 
 The repo root is the workspace. Coworkers: **Code → Download ZIP** (or `git clone`), extract, open the folder in Claude Code Desktop. Updates are pulled by re-downloading; `rawdata/` and `output/` are gitignored so their work is never overwritten. `.mcp.json` and `.claude/settings.local.json` are not committed.
+
+## Acceptance record
+
+- **2026-09-01** — 52 tests pass on Windows PowerShell 5.1 (Parallels VM). `examples/app-data-spec.json` built against the real `rawdata/App Data.xlsx` (7,197 rows; 1 table, 5 measures, 2 pages, 12 visuals) and the star fixture (3 tables incl. Calendar, 2 relationships) both load without errors through the Tabular Object Model (`powerbi-modeling` MCP `ConnectFolder`). Opening the `.pbip` in Power BI Desktop's GUI could not be automated from the SSH session (no interactive desktop); to be confirmed by hand on Windows.
+- Implementation notes: every `.ps1` is UTF-8 **with BOM** (Windows PowerShell 5.1 reads BOM-less scripts in the ANSI code page and corrupts Korean literals); PowerShell variable names are case-insensitive (`$visual` vs `$Visual` collided once); visual skeletons live in the in-code catalog rather than template files.
