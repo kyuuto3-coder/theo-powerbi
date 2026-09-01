@@ -23,7 +23,7 @@ You turn `rawdata/*.csv|xlsx` + the user's wishes into `output/<Name>/<Name>.pbi
 1. **PROFILE** — run:
    `powershell -NoProfile -ExecutionPolicy Bypass -File .claude/skills/powerbi/scripts/profile-data.ps1`
    Output = files → tables (columns, type, nulls, distinct, samples, KEY flags), dictionary sheets, csv `encoding`, `header_row`, and `KEY MATCHES` for star schemas. Exit code 2 = no files → ask the user (Korean) to put files in `rawdata/`.
-2. **UNDERSTAND** — read the user's text; view an attached mockup image once and note: pages, visual types, KPIs, layout (colors are ignored; the theme is fixed). Map their words to columns from the profile. If a dictionary sheet exists, use its descriptions for column `description` and for choosing Korean names.
+2. **UNDERSTAND** — read the user's text; view an attached mockup image once and note: pages, visual types, KPIs, layout (colors are ignored; the theme is fixed). Map their words to columns from the profile. If a dictionary sheet exists, use its descriptions for column `description` and for choosing English names.
 3. **DESIGN** — decide:
    - *Schema:* one table candidate → **flat** (no relationships). Several tables with `KEY MATCHES` → **star**: facts = big tables with numeric measures, dims = tables with a KEY; relationships many→one from fact key to dim key. Independent tables with no matches → separate tables, no relationships.
    - *Columns:* list only what the report needs + keys. Drop `(unnamed)`/index columns. `hidden: true` for keys. Types from the profile (`decimal` for money, `double` for ratios/ratings). English `rename` for every user-facing column (translate Korean headers, e.g. `매출액` → `Revenue`).
