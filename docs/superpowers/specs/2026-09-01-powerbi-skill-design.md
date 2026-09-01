@@ -36,12 +36,13 @@ theo-powerbi/                       ← coworkers clone or download ZIP, then op
     ├── scripts/
     │   ├── profile-data.ps1        ← rawdata/ → compact text profile
     │   ├── build-pbip.ps1          ← report-spec.json → validated PBIP project
-    │   └── test-build.ps1          ← smoke test: sample spec → build → assert structure
+    │   ├── build-guide.ps1         ← report-spec.json → manual-guide.md (section 10)
+    │   ├── lib/*.ps1               ← shared: io, xlsx, csvread, infer, spec, tmdl, pbir, guide
+    │   └── tests/                  ← run-tests.ps1 harness, *.test.ps1, fixtures/
     ├── templates/
-    │   ├── visuals/<visualType>.json   ← one PBIR visual.json skeleton per supported type
-    │   ├── report.json, page.json, pages.json, version.json, definition.pbir, definition.pbism, project.pbip
-    │   ├── theme/Fluent2-CY26SU08.json ← base theme copied from the WWI reference
-    │   └── tmdl/{database,model}.tmdl.tpl
+    │   ├── report.json             ← copied from the WWI reference (theme + report settings)
+    │   └── theme/Fluent2-CY26SU08.json ← base theme copied from the WWI reference
+    │   (visual skeletons live in code: the visual catalog in scripts/lib/spec.ps1 / pbir.ps1)
     ├── reference/
     │   ├── spec-schema.md          ← the report-spec.json contract (section 5), with a complete example
     │   ├── visual-catalog.md       ← which visual answers which question; roles each accepts
@@ -78,6 +79,9 @@ Claude reads `SKILL.md` always, `reference/*.md` only when needed (SKILL.md says
 5. BUILD     powershell -NoProfile -ExecutionPolicy Bypass -File .claude/skills/powerbi/scripts/build-pbip.ps1 -Spec output/<Name>/report-spec.json
              On validation error: fix the spec with a minimal Edit, rebuild. Do not rewrite the whole spec.
 6. HANDOFF   Korean summary: what was built (pages/visuals/measures), assumptions, how to open, how to iterate.
+7. GUIDE?    Ask in Korean whether they also want a manual how-to guide (section 10). If yes:
+             powershell -NoProfile -ExecutionPolicy Bypass -File .claude/skills/powerbi/scripts/build-guide.ps1 -Spec output/<Name>/report-spec.json
+             then point to output/<Name>/manual-guide.md. Do not read the guide back.
 ```
 
 Token rules (verbatim in SKILL.md):
@@ -191,7 +195,7 @@ Detection rules:
 - Type inference over the first 2,000 rows: int64 (all integers), decimal (numeric with ≤ 4 decimals, or currency-like format), double (other numeric), date/datetime (xlsx: cell style numFmt is a date format; csv: ≥ 95 % of samples parse as date), boolean (true/false/0/1 only with header hinting), else text.
 - CSV encoding: BOM → UTF-8; else try UTF-8 strict decode on the first 64 KB; on failure → 949 (CP949).
 - Dictionary sheet: ≤ 3 non-empty columns, ≤ 60 rows, header contains name/description-like words (`name|field|column|컬럼|항목` and `desc|설명|meaning`), or > 70 % of first-column values equal a header in another sheet.
-- Key candidate: distinct == rows and no nulls. Star candidate: for every pair of tables, a column name shared or suffix-matching (`X Key`, `X ID`, `XID`) where ≥ 90 % of the many-side distinct values exist on a unique-side column.
+- Key candidate: distinct == non-null == sampled rows (`KEY` when the sample covers the whole table, `KEY?` otherwise). Star candidate: for every pair of tables, a column whose normalized name (letters/digits only, case-insensitive) matches a column that is unique on the other side. Claude confirms the match from the profile; no containment scan is done (keeps the profiler fast on 100k+ row files).
 - xlsx is read via `System.IO.Compression` + XML (no Excel COM, no modules). Shared strings and styles are parsed once per workbook.
 
 ## 7. Schema modes
@@ -235,10 +239,20 @@ Exit code 0 prints one line: `BUILT output/<Name>/<Name>.pbip  (tables=N measure
 - **End-to-end**: open the generated `.pbip` in Power BI Desktop on the VM (`Start-Process`), then connect the `powerbi-modeling` MCP to the running instance and assert the model exposes the spec's tables, measures, and relationships, and that a DAX `EVALUATE` of a measure returns a value. This is the acceptance test for "opens without error".
 - Structural diff of the generated report tree against the WWI reference (same file set per page/visual, same `$schema` versions).
 
-## 10. Out of scope (v1)
+## 10. Manual guideline (`build-guide.ps1`)
+
+After the hand-off (workflow step 6) Claude asks, in Korean, whether the coworker also wants a guide for building the same report **by hand** in Power BI Desktop. If yes, Claude runs `build-guide.ps1 -Spec output/<Name>/report-spec.json`, which writes `output/<Name>/manual-guide.md` deterministically from the spec — Claude does not author the guide (zero extra tokens beyond one command and a one-line answer).
+
+Guide rules:
+
+- **Prose in Korean; every menu, ribbon tab, pane, button, visual name, field-well name, data type and dialog label in strict English**, exactly as Power BI Desktop's English UI shows them (e.g. **Home > Get Data > Excel Workbook**, **Transform Data**, **Use First Row as Headers**, **Choose Columns**, **Close & Apply**, **Model view**, **Manage relationships**, **New measure**, **Mark as date table**, **Visualizations** pane, **Clustered bar chart**, **X-axis / Y-axis / Legend / Values / Rows / Columns / Field / Data**, **Filters** pane → **Top N**, **Format visual > General > Title**).
+- Sections, generated from the spec in this order: 0 준비 (files, Power BI Desktop, canvas size), 1 데이터 가져오기 (one subsection per table: Get Data → Navigator → Power Query steps: Remove Top Rows when `headerRow` > 1, Use First Row as Headers, Choose Columns listing the spec columns, renames, data types with the Power Query type names `Whole Number / Decimal Number / Fixed decimal number / Text / Date / Date/Time / True/False`, query rename, Close & Apply; CSV adds **File Origin** `65001: Unicode (UTF-8)` or `949: Korean` and **Delimiter**), 2 모델 (hide columns, Summarization, key, relationships via **Manage relationships > New** with cardinality/direction/active, Calendar table via **New table** with the DAX pasted in a code block, **Mark as date table**, **Sort by column**), 3 측정값 (one **New measure** per measure with the DAX in a code block and its **Format**), 4 보고서 페이지 (per page: rename page, page filters; per visual: the Visualizations-pane name, each field well and what to drag there, **Sort axis** direction, **Top N** filter setup, title text, and the exact **Size** and **Position** from the grid math so the layout matches the generated report), 5 저장 (**File > Save As** `.pbix`).
+- Field-well names per visual (English UI): card → Data; multi-row card → Fields; gauge → Value / Minimum value / Maximum value / Target value; line/area/column charts → X-axis / Y-axis / Legend; bar charts → Y-axis (category) / X-axis (value) / Legend; pie/donut → Legend / Values; scatter → Values (details) / X Axis / Y Axis / Size; table → Columns; matrix → Rows / Columns / Values; slicer → Field; text box → **Insert > Text box**.
+
+## 11. Out of scope (v1)
 
 Maps and custom visuals; bookmarks, drillthrough, tooltips pages; row-level security; DirectQuery/database sources; editing an existing `.pbix`/`.pbip`; publishing to Fabric/Service; incremental refresh; Power Query transformations beyond column select/rename/type; multiple files merged into one table (folder sources).
 
-## 11. Distribution
+## 12. Distribution
 
 The repo root is the workspace. Coworkers: **Code → Download ZIP** (or `git clone`), extract, open the folder in Claude Code Desktop. Updates are pulled by re-downloading; `rawdata/` and `output/` are gitignored so their work is never overwritten. `.mcp.json` and `.claude/settings.local.json` are not committed.
