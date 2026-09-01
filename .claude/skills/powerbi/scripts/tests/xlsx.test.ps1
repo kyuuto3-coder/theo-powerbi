@@ -32,3 +32,10 @@ Test-Case 'MaxRows limits rows read but LastRow still reports the sheet size' {
     Assert-Equal 5 $wb.Sheets[0].Rows.Count
     Assert-Equal 41 $wb.Sheets[0].LastRow
 }
+Test-Case 'ConvertFrom-OADateSafe converts valid serials and leaves out-of-range numbers alone' {
+    Assert-True ((ConvertFrom-OADateSafe 45658) -is [datetime]) 'valid serial → datetime'
+    Assert-Equal 2025 (ConvertFrom-OADateSafe 45658).Year
+    Assert-Equal 9999 (ConvertFrom-OADateSafe 2958465).Year
+    Assert-True ((ConvertFrom-OADateSafe 1e15) -is [double]) 'huge value stays numeric'
+    Assert-True ((ConvertFrom-OADateSafe -5) -is [double]) 'negative stays numeric'
+}

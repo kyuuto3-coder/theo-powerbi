@@ -73,6 +73,13 @@ function Read-XlsxSharedStrings {
     return $list
 }
 
+function ConvertFrom-OADateSafe {
+    # Excel serial → DateTime; values outside Excel's valid range (0 .. 2958465 = 9999-12-31) stay numeric instead of crashing the profile.
+    param([double]$Serial)
+    if ($Serial -lt 0 -or $Serial -ge 2958466) { return $Serial }
+    try { return [DateTime]::FromOADate($Serial) } catch { return $Serial }
+}
+
 function ConvertFrom-CellRef {
     # "AB12" → @{ Col=28; Row=12 }
     param([string]$Ref)
@@ -115,7 +122,7 @@ function Read-XlsxSheet {
                             if ($v -ne $null -and $v -ne '') {
                                 $d = [double]::Parse($v, [Globalization.CultureInfo]::InvariantCulture)
                                 $s = -1; if ($c.s) { $s = [int]$c.s }
-                                if ($s -ge 0 -and $s -lt $IsDateStyle.Count -and $IsDateStyle[$s]) { $val = [DateTime]::FromOADate($d) } else { $val = $d }
+                                if ($s -ge 0 -and $s -lt $IsDateStyle.Count -and $IsDateStyle[$s]) { $val = ConvertFrom-OADateSafe $d } else { $val = $d }
                             }
                         }
                     }

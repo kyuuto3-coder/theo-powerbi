@@ -129,6 +129,33 @@ function ConvertTo-KeyString {
 
 function Test-IdLikeName { param([string]$Name) return ($Name -match '(?i)(^id$|id$|_id|key$|code$|코드$|번호$|키$|no$|^sku|^pk_|_pk$)') }
 
+function Get-SubjectTokens {
+    # Lower-case word tokens of a column name minus id/key noise words. Latin tokens only when -LatinOnly.
+    param([string]$Name)
+    $stop = @('id', 'key', 'code', 'no', 'num', 'number', 'nbr', 'pk', 'fk', 'wwi', 'sk', 'fact', 'dim', '코드', '번호', '키', '아이디', '식별자')
+    $raw = [regex]::Split($Name.ToLowerInvariant(), '[^\p{L}\p{N}]+') | Where-Object { $_ -ne '' }
+    $tokens = New-Object System.Collections.Generic.List[string]
+    foreach ($t in $raw) {
+        $t2 = $t -replace '(id|key|code|no|번호|코드|키)$', ''   # customerid → customer, 지역코드 → 지역
+        if ($t2 -eq '' ) { $t2 = $t }
+        if ($stop -notcontains $t2 -and $stop -notcontains $t) { $tokens.Add($t2) }
+    }
+    return $tokens.ToArray()
+}
+
+function Test-NameTokensCompatible {
+    # $true unless both names carry Latin subject words and none of them share a prefix (>= 3 chars): 'Stock Item Key' vs 'Employee Key' → $false; 'cust_no' vs 'customer_id' → $true; Korean vs English → $true (not judged).
+    param([string]$A, [string]$B)
+    $ta = @(Get-SubjectTokens $A | Where-Object { $_ -match '^[a-z0-9]+$' }); $tb = @(Get-SubjectTokens $B | Where-Object { $_ -match '^[a-z0-9]+$' })
+    if ($ta.Count -eq 0 -or $tb.Count -eq 0) { return $true }
+    foreach ($x in $ta) { foreach ($y in $tb) {
+        $n = [Math]::Min([Math]::Min($x.Length, $y.Length), 3)
+        if ($n -ge 3 -and $x.Substring(0, $n) -eq $y.Substring(0, $n)) { return $true }
+        if ($x -eq $y) { return $true }
+    } }
+    return $false
+}
+
 function Get-TypeGroup { param([string]$Type) if ($Type -in 'int64', 'double', 'decimal') { return 'number' }; if ($Type -in 'date', 'datetime') { return 'date' }; return $Type }
 
 function Get-TupleStrings {
@@ -174,8 +201,10 @@ function Get-Containment {
 function Find-KeyMatches {
     # $Tables: @( @{ Name; Rows (sampled data rows, object[] each); Columns = @( @{ Name; Index; Type; IsUnique; Values (HashSet of key strings) } ); CompositeKey = $null | @{ Indices; Names; Values (HashSet) } } )
     # Returns strings: "many.col -> one.key  (NN% of M sampled values found[; names differ])"
-    param([Parameter(Mandatory)]$Tables, [int]$MinPercent = 90)
+    param([Parameter(Mandatory)]$Tables, [int]$MinPercent = 90, [switch]$IncludeWeak)
+    # -IncludeWeak: also return @{ Strong = @(...); Weak = @(...) } where Weak = value evidence ok but the names are unrelated (ask the user)
     $out = New-Object System.Collections.Generic.List[string]
+    $weak = New-Object System.Collections.Generic.List[string]
     for ($a = 0; $a -lt $Tables.Count; $a++) {
         $ta = $Tables[$a]
         for ($b = 0; $b -lt $Tables.Count; $b++) {
@@ -183,18 +212,39 @@ function Find-KeyMatches {
             $tb = $Tables[$b]
             foreach ($ca in $ta.Columns) {
                 if ($ca.IsUnique -or $ca.Values.Count -lt 2) { continue }
+                $namesUnrelated = $false
+                $found = New-Object System.Collections.Generic.List[object]   # @{ Line; SameName }
                 foreach ($cb in $tb.Columns) {
                     if (-not $cb.IsUnique -or $cb.Name -eq '(unnamed)' -or $ca.Name -eq '(unnamed)') { continue }
                     if ((Get-TypeGroup $ca.Type) -ne (Get-TypeGroup $cb.Type)) { continue }
                     $sameName = ((Get-NormalizedName $ca.Name) -eq (Get-NormalizedName $cb.Name))
-                    # different names: only trust the value overlap when both names look like ids, or the key is not a tiny code range
-                    if (-not $sameName -and -not (((Test-IdLikeName $ca.Name) -and (Test-IdLikeName $cb.Name)) -or ($cb.Values.Count -ge 20 -and $ca.Values.Count -ge 5))) { continue }
+                    if (-not $sameName) {
+                        # Different names: value overlap alone is weak evidence. Require the fact->dimension shape and id-like names or a non-trivial key,
+                        # and for numeric keys a many-side that spans the key's range (dense 1..N keys "contain" every small integer column).
+                        if ($ca.Values.Count -lt 3) { continue }
+                        if ($ta.RowCount -lt $tb.RowCount) { continue }
+                        $namesUnrelated = -not (Test-NameTokensCompatible $ca.Name $cb.Name)
+                        if (-not (((Test-IdLikeName $ca.Name) -and (Test-IdLikeName $cb.Name)) -or ($cb.Values.Count -ge 20 -and $ca.Values.Count -ge 5))) { continue }
+                        if ((Get-TypeGroup $ca.Type) -eq 'number' -and $null -ne $ca.Min -and $null -ne $cb.Min) {
+                            $keyRange = [double]$cb.Max - [double]$cb.Min; $colRange = [double]$ca.Max - [double]$ca.Min
+                            if ($keyRange -gt 0 -and ($colRange / $keyRange) -lt 0.5) { continue }
+                            $dense = ($keyRange -gt 0 -and $cb.Values.Count -ge 0.9 * ($keyRange + 1))
+                            if ($dense -and -not (Test-IdLikeName $ca.Name)) { continue }
+                        }
+                    }
                     $pct = Get-Containment -Sample @($ca.Values) -Set $cb.Values
                     if ($pct -ge $MinPercent -or ($sameName -and $pct -ge 50)) {
+                        if (-not $sameName -and $namesUnrelated) {
+                            $weak.Add(("{0}.{1} -> {2}.{3}  ({4}% of {5} sampled values found; names unrelated - confirm with the user)" -f $ta.Name, $ca.Name, $tb.Name, $cb.Name, $pct, $ca.Values.Count)); continue
+                        }
                         $note = if ($sameName) { '' } else { '; names differ' }
-                        $out.Add(("{0}.{1} -> {2}.{3}  ({4}% of {5} sampled values found{6})" -f $ta.Name, $ca.Name, $tb.Name, $cb.Name, $pct, $ca.Values.Count, $note))
+                        $found.Add(@{ SameName = $sameName; Line = ("{0}.{1} -> {2}.{3}  ({4}% of {5} sampled values found{6})" -f $ta.Name, $ca.Name, $tb.Name, $cb.Name, $pct, $ca.Values.Count, $note) })
                     }
                 }
+                # a column that matches a same-named key elsewhere gets no different-name guesses
+                $hasSameNameAnywhere = $false
+                foreach ($tx in $Tables) { if ($tx.Name -eq $ta.Name) { continue }; foreach ($cx in $tx.Columns) { if ($cx.IsUnique -and $cx.Name -ne '(unnamed)' -and (Get-NormalizedName $cx.Name) -eq (Get-NormalizedName $ca.Name)) { $hasSameNameAnywhere = $true } } }
+                foreach ($f in $found) { if ($f.SameName -or -not $hasSameNameAnywhere) { $out.Add($f.Line) } }
             }
             if ($null -ne $tb.CompositeKey) {
                 # candidate tuple in A: for each part of B's key, a column of A with the same normalized name, else the best-containment column of the same type group
@@ -220,6 +270,7 @@ function Find-KeyMatches {
             }
         }
     }
+    if ($IncludeWeak) { return @{ Strong = $out.ToArray(); Weak = $weak.ToArray() } }
     return $out.ToArray()
 }
 

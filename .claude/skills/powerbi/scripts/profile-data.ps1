@@ -2,7 +2,7 @@
 .SYNOPSIS  Profiles every .csv/.xlsx in rawdata/ into a compact text summary for Claude.
 .EXAMPLE   powershell -NoProfile -ExecutionPolicy Bypass -File .claude/skills/powerbi/scripts/profile-data.ps1
 #>
-param([string]$DataFolder = '', [int]$SampleRows = 2000, [int]$MaxColumns = 200, [int]$FullReadLimit = 400000)
+param([string]$DataFolder = '', [int]$SampleRows = 10000, [int]$MaxColumns = 200, [int]$FullReadLimit = 400000)
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 . (Join-Path $PSScriptRoot 'lib/io.ps1')
@@ -48,12 +48,13 @@ function Register-Table {
     $dataRows = Get-DataRows $T
     $cols = New-Object System.Collections.Generic.List[object]
     foreach ($c in $T.Columns) {
-        $vals = $c.Profile.Values; $unique = $c.Profile.IsUnique
+        $vals = $c.Profile.Values; $unique = $c.Profile.IsUnique; $min = $c.Profile.Min; $max = $c.Profile.Max
         if ($unique -and $T.DataRows -gt $T.SampleRows -and $c.Name -ne '(unnamed)') {
             $vals = Get-FullValues -Path $Path -Ext $Ext -CodePage $CodePage -Delimiter $Delimiter -Sheet ([string]$Sheet) -HeaderIndex $T.HeaderIndex -ColIndex $c.Index
             $unique = ($vals.Count -ge [Math]::Min($T.DataRows, $FullReadLimit))
+            if ($c.Profile.Type -in 'int64', 'double', 'decimal') { $min = $null; $max = $null; foreach ($v in $vals) { $d = [double]::Parse($v, [Globalization.CultureInfo]::InvariantCulture); if ($null -eq $min -or $d -lt $min) { $min = $d }; if ($null -eq $max -or $d -gt $max) { $max = $d } } }
         }
-        $cols.Add(@{ Name = $c.Name; Index = $c.Index; Type = $c.Profile.Type; IsUnique = $unique; Values = $vals })
+        $cols.Add(@{ Name = $c.Name; Index = $c.Index; Type = $c.Profile.Type; IsUnique = $unique; Values = $vals; Min = $min; Max = $max })
     }
     $composite = $null
     if (-not $HasSingleKey) {
@@ -68,7 +69,7 @@ function Register-Table {
             }
         }
     }
-    $tables.Add(@{ Name = $Name; File = $File; Sheet = $Sheet; Rows = $dataRows; Columns = $cols.ToArray(); CompositeKey = $composite })
+    $tables.Add(@{ Name = $Name; File = $File; Sheet = $Sheet; Rows = $dataRows; RowCount = $T.DataRows; Columns = $cols.ToArray(); CompositeKey = $composite })
 }
 
 function Get-DataRows { param($T) if ($T.Grid.Count -le $T.HeaderIndex + 1) { return @() }; return @($T.Grid[($T.HeaderIndex + 1)..($T.Grid.Count - 1)]) }
@@ -110,7 +111,7 @@ function Add-TableLines {
         $notes = New-Object System.Collections.Generic.List[string]
         if ($null -ne $p.Min -and $null -ne $p.Max) { $notes.Add(("min={0} max={1}" -f $p.Min, $p.Max)) }
         if ($c.Name -eq '(unnamed)') { $notes.Add('index? drop') }
-        elseif ($p.IsUnique -and $p.Type -in 'int64', 'text' -and ($c.Index -eq $firstUniqueInt -or $c.Name -match '(?i)(^id$|id$|_id|key$|code$|코드$|번호$|키$|no$)')) {
+        elseif ($p.IsUnique -and (($p.Type -in 'int64', 'text' -and ($c.Index -eq $firstUniqueInt -or $c.Name -match '(?i)(^id$|id$|_id|key$|code$|코드$|번호$|키$|no$)')) -or $p.Type -eq 'date')) {
             if ($T.SampleRows -ge $T.DataRows) { $notes.Add('KEY') } else { $notes.Add('KEY?') } }
         $sample = (@($p.Samples | ForEach-Object { if ($p.Type -eq 'text') { '"' + (Format-Cell $_) + '"' } else { Format-Cell $_ } }) -join ', ')
         $lines.Add(("    {0,-4} {1,-24} {2,-9} {3,-6} {4,-8} {5,-28} {6}" -f $colLabel, (Format-Cell $c.Name), $p.Type, ("{0}%" -f $p.NullPct), $p.Distinct, $sample, ($notes -join ' ')))
@@ -181,10 +182,14 @@ if ($tables.Count -ge 2) {
         $lines.Add('GROUPS (identical columns -> load as ONE table with "filePattern"; new files matching the pattern are picked up on Refresh):')
         foreach ($g in $groups) { $sheetNote = if ($g.Sheet) { '  sheet "' + $g.Sheet + '"' } else { '' }; $lines.Add('    filePattern "' + $g.Pattern + '"' + $sheetNote + '  <- ' + ($g.Files -join ', ')) }
     }
-    $matches = @(Find-KeyMatches -Tables $tables.ToArray())
+    $km = Find-KeyMatches -Tables $tables.ToArray() -IncludeWeak
     $lines.Add('KEY MATCHES (many-side column -> unique key; % = share of sampled values found on the key side; >= 90% is a safe relationship):')
-    if ($matches.Count -eq 0) { $lines.Add('    none - treat tables as independent (flat) unless the user says otherwise') }
-    foreach ($m in $matches) { $lines.Add('    ' + $m) }
+    if ($km.Strong.Count -eq 0) { $lines.Add('    none - treat tables as independent (flat) unless the user says otherwise') }
+    foreach ($m in $km.Strong) { $lines.Add('    ' + $m) }
+    if ($km.Weak.Count -gt 0) {
+        $lines.Add('POSSIBLE MATCHES (values agree but the column names are unrelated - ask the user before using):')
+        foreach ($m in $km.Weak) { $lines.Add('    ' + $m) }
+    }
 }
 $lines.Add('NOTE header_row is relative to the sheet''s used range (what Power BI sees); for csv it is the physical line number.')
 $lines | ForEach-Object { $_ }
