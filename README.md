@@ -1,4 +1,4 @@
-# theo-powerbi — Claude로 Power BI 리포트 만들기
+﻿# theo-powerbi — Claude로 Power BI 리포트 만들기
 
 CSV/Excel 파일을 넣고, 원하는 대시보드를 말(또는 그림)로 설명하면 Claude가 Power BI Desktop에서 바로 열리는 프로젝트(`.pbip`)를 만들어 줍니다.
 
@@ -20,6 +20,10 @@ CSV/Excel 파일을 넣고, 원하는 대시보드를 말(또는 그림)로 설�
 - `rawdata/`는 여러분의 폴더입니다. 파일을 자유롭게 넣고, 바꾸고, 지우세요.
 - **같은 파일 이름·시트 이름·열 구성**으로 내용만 바뀌었다면 Power BI Desktop에서 **Refresh**만 누르면 됩니다.
 - 파일을 추가하거나 열이 바뀌었다면 Claude에게 "데이터 파일을 바꿨어요"라고 말하세요. 다시 분석해서 새로 만들어 줍니다.
+
+## 다른 PC에서 만든 .pbip를 열 때
+- 생성된 프로젝트는 데이터 폴더 경로를 **`DataFolder` 파라미터** 하나에 담고 있습니다. 다른 PC로 옮겨 열면 "열을 찾을 수 없음" 같은 오류가 나는데, Power BI Desktop에서 **Home > Transform data > Edit parameters** → `DataFolder`에 그 PC의 `rawdata` 폴더 전체 경로(예: `C:\Users\me\theo-powerbi\rawdata`)를 넣고 **OK** → **Refresh** 하면 됩니다.
+- 공유가 목적이면 `.pbip` 대신 **`.pbix`로 저장한 파일**을 보내세요. 데이터가 파일 안에 들어 있어 어디서나 바로 열립니다.
 
 ## 주의
 - 리포트 안의 이름(테이블·열·측정값·페이지·제목)은 **영어**로 만들어집니다. Power BI Desktop 메뉴가 영어이고, 영어 사용자와 공유하기 쉽게 하기 위함입니다. Claude와의 대화는 한국어입니다.

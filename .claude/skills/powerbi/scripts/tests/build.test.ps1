@@ -8,7 +8,7 @@ Test-Case 'build of spec-flat produces a complete PBIP project' {
     foreach ($f in 'AppsFlat.pbip', '.gitignore', 'AppsFlat.Report/definition.pbir', 'AppsFlat.Report/definition/report.json', 'AppsFlat.Report/definition/version.json',
                    'AppsFlat.Report/definition/pages/pages.json', 'AppsFlat.Report/StaticResources/SharedResources/BaseThemes/Fluent2-CY26SU08.json',
                    'AppsFlat.SemanticModel/definition.pbism', 'AppsFlat.SemanticModel/definition/database.tmdl', 'AppsFlat.SemanticModel/definition/model.tmdl',
-                   'AppsFlat.SemanticModel/definition/relationships.tmdl', 'AppsFlat.SemanticModel/definition/tables/Apps.tmdl', 'AppsFlat.SemanticModel/definition/tables/Calendar.tmdl') {
+                   'AppsFlat.SemanticModel/definition/relationships.tmdl', 'AppsFlat.SemanticModel/definition/expressions.tmdl', 'AppsFlat.SemanticModel/definition/tables/Apps.tmdl', 'AppsFlat.SemanticModel/definition/tables/Calendar.tmdl') {
         Assert-True (Test-Path (Join-Path $flatOut $f)) "missing $f"
     }
     foreach ($j in (Get-ChildItem -Recurse -File -Path $flatOut | Where-Object { $_.Extension -in '.json', '.pbip', '.pbir', '.pbism' })) { [void]([IO.File]::ReadAllText($j.FullName) | ConvertFrom-Json) }
@@ -43,7 +43,7 @@ Test-Case 'build of spec-star: csv partitions, relationships, Series role' {
     Assert-Equal 0 $LASTEXITCODE $log
     Assert-Match 'tables=3 measures=2 pages=1 visuals=3' $log
     $sales = [IO.File]::ReadAllText((Join-Path $out 'SalesStar.SemanticModel/definition/tables/Sales.tmdl'))
-    Assert-Match 'Csv\.Document\(File\.Contents\("[^"]*sales_cp949\.csv"\),\[Delimiter=",", Encoding=949, QuoteStyle=QuoteStyle\.Csv\]\)' $sales
+    Assert-Match 'Csv\.Document\(File\.Contents\(DataFolder & "\\sales_cp949\.csv"\),\[Delimiter=",", Encoding=949, QuoteStyle=QuoteStyle\.Csv\]\)' $sales
     Assert-True (-not $sales.Contains('RenameColumns')) 'no renames in star spec'
     $rels = [IO.File]::ReadAllText((Join-Path $out 'SalesStar.SemanticModel/definition/relationships.tmdl'))
     Assert-Match "fromColumn: Sales\.'지역코드'\r?\n\ttoColumn: Regions\.'지역코드'" $rels

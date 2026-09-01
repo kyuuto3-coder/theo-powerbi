@@ -15,3 +15,6 @@ output/*
 # OS
 .DS_Store
 Thumbs.db
+
+# projects pasted at the repo root (keep generated projects under output/)
+/AppGenreStats/

@@ -48,5 +48,5 @@ ConvertTo-JsonFile -Path $pbipPath -Object ([ordered]@{
 Write-Utf8File -Path (Join-Path $OutputDir '.gitignore') -Content "**/.pbi/localSettings.json`n**/.pbi/cache.abf`n"
 foreach ($w in $mw.Warnings) { Write-Output ("WARN: " + $w) }
 $measureCount = 0; foreach ($k in $model.Tables.Keys) { $measureCount += @($model.Tables[$k].Measures).Count }
-Write-Output ("BUILT {0}  (tables={1} measures={2} pages={3} visuals={4})" -f $pbipPath, $model.Tables.Count, $measureCount, $rw.Pages, $rw.Visuals)
+Write-Output ("BUILT {0}  (tables={1} measures={2} pages={3} visuals={4})  DataFolder={5}" -f $pbipPath, $model.Tables.Count, $measureCount, $rw.Pages, $rw.Visuals, $mw.DataFolder)
 exit 0

@@ -16,16 +16,17 @@ function Get-TmdlDataType {
 
 function New-MQuery {
     # Returns the M query as an array of lines (unindented).
-    param([Parameter(Mandatory)]$Table, [Parameter(Mandatory)][string]$AbsPath)
+    param([Parameter(Mandatory)]$Table)
     $l = New-Object System.Collections.Generic.List[string]
+    $fileRef = 'DataFolder & ' + (ConvertTo-MString ('\' + [string]$Table.File))
     $l.Add('let')
     if ($Table.IsXlsx) {
-        $l.Add('    Source = Excel.Workbook(File.Contents(' + (ConvertTo-MString $AbsPath) + '), null, true),')
+        $l.Add('    Source = Excel.Workbook(File.Contents(' + $fileRef + '), null, true),')
         $l.Add('    Sheet = Source{[Item=' + (ConvertTo-MString ([string]$Table.Sheet)) + ',Kind="Sheet"]}[Data],')
         $prev = 'Sheet'
     } else {
         $delim = if ($Table.Delimiter -eq "`t") { '#(tab)' } else { ([string]$Table.Delimiter).Replace('"', '""') }
-        $l.Add('    Source = Csv.Document(File.Contents(' + (ConvertTo-MString $AbsPath) + '),[Delimiter="' + $delim + '", Encoding=' + $Table.Encoding + ', QuoteStyle=QuoteStyle.Csv]),')
+        $l.Add('    Source = Csv.Document(File.Contents(' + $fileRef + '),[Delimiter="' + $delim + '", Encoding=' + $Table.Encoding + ', QuoteStyle=QuoteStyle.Csv]),')
         $prev = 'Source'
     }
     if ($Table.HeaderRow -gt 1) { $l.Add('    Skipped = Table.Skip(' + $prev + ', ' + ($Table.HeaderRow - 1) + '),'); $prev = 'Skipped' }
@@ -88,7 +89,7 @@ function New-CalendarDax {
 }
 
 function New-TableTmdl {
-    param([Parameter(Mandatory)]$Table, [Parameter(Mandatory)]$Model, [AllowNull()][string]$AbsPath)
+    param([Parameter(Mandatory)]$Table, [Parameter(Mandatory)]$Model)
     $l = New-Object System.Collections.Generic.List[string]
     $l.Add('table ' + (Format-TmdlName $Table.Name))
     $l.Add("`tlineageTag: " + (New-LineageTag))
@@ -104,7 +105,7 @@ function New-TableTmdl {
         $l.Add("`tpartition " + (Format-TmdlName $Table.Name) + " = m")
         $l.Add("`t`tmode: import")
         $l.Add("`t`tsource =")
-        foreach ($line in (New-MQuery -Table $Table -AbsPath $AbsPath)) { $l.Add("`t`t`t`t" + $line) }
+        foreach ($line in (New-MQuery -Table $Table)) { $l.Add("`t`t`t`t" + $line) }
     }
     $l.Add('')
     return ($l -join "`r`n")
@@ -128,6 +129,20 @@ function New-ModelTmdl {
     $l.Add('annotation PBI_QueryOrder = [' + ($order -join ',') + ']')
     $l.Add('')
     foreach ($n in $Model.Tables.Keys) { $l.Add('ref table ' + (Format-TmdlName $n)) }
+    $l.Add('')
+    $l.Add('ref expression DataFolder')
+    $l.Add('')
+    return ($l -join "`r`n")
+}
+
+function New-ExpressionsTmdl {
+    # Shared M parameter DataFolder = folder holding the data files. Users change it via Transform data > Edit parameters when the project moves.
+    param([Parameter(Mandatory)][string]$DataFolder)
+    $l = New-Object System.Collections.Generic.List[string]
+    $l.Add('expression DataFolder = ' + (ConvertTo-MString $DataFolder) + ' meta [IsParameterQuery=true, Type="Text", IsParameterQueryRequired=true]')
+    $l.Add("`tlineageTag: " + (New-LineageTag))
+    $l.Add('')
+    $l.Add("`tannotation PBI_ResultType = Text")
     $l.Add('')
     return ($l -join "`r`n")
 }
@@ -156,14 +171,12 @@ function Write-SemanticModel {
     Write-Utf8File -Path (Join-Path $def 'database.tmdl') -Content "database`r`n`tcompatibilityLevel: 1606`r`n"
     Write-Utf8File -Path (Join-Path $def 'model.tmdl') -Content (New-ModelTmdl -Model $Model)
     if ($Model.Relationships.Count -gt 0) { Write-Utf8File -Path (Join-Path $def 'relationships.tmdl') -Content (New-RelationshipsTmdl -Model $Model) }
+    $absRaw = (Get-Item -LiteralPath $RawDataDir).FullName.TrimEnd([char]92, [char]47)
+    if ($absRaw -notmatch '^([A-Za-z]:\\|\\\\)') { $warnings.Add("data folder '$absRaw' is not a Windows path - open the project on Windows and set the DataFolder parameter (Transform data > Edit parameters)") }
+    Write-Utf8File -Path (Join-Path $def 'expressions.tmdl') -Content (New-ExpressionsTmdl -DataFolder $absRaw)
     foreach ($n in $Model.Tables.Keys) {
         $t = $Model.Tables[$n]
-        $abs = $null
-        if (-not $t.IsCalculated) {
-            $abs = (Get-Item -LiteralPath (Join-Path $RawDataDir $t.File)).FullName
-            if ($abs -notmatch '^([A-Za-z]:\\|\\\\)') { $warnings.Add("data path '$abs' is not a Windows path - rebuild on Windows before opening in Power BI Desktop") }
-        }
-        Write-Utf8File -Path (Join-Path (Join-Path $def 'tables') ($n + '.tmdl')) -Content (New-TableTmdl -Table $t -Model $Model -AbsPath $abs)
+        Write-Utf8File -Path (Join-Path (Join-Path $def 'tables') ($n + '.tmdl')) -Content (New-TableTmdl -Table $t -Model $Model)
     }
-    return @{ Warnings = $warnings.ToArray() }
+    return @{ Warnings = $warnings.ToArray(); DataFolder = $absRaw }
 }

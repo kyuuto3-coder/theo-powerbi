@@ -1,4 +1,4 @@
----
+﻿---
 name: powerbi
 description: Build a Power BI Desktop project (.pbip) from the CSV/XLSX files in rawdata/ based on the user's description, preferences or mockup image. Use for ANY request about dashboards, reports, charts, KPIs, data analysis, visualization, or Power BI. Talk to the user in Korean.
 ---
@@ -34,7 +34,7 @@ You turn `rawdata/*.csv|xlsx` + the user's wishes into `output/<Name>/<Name>.pbi
 5. **BUILD** — run:
    `powershell -NoProfile -ExecutionPolicy Bypass -File .claude/skills/powerbi/scripts/build-pbip.ps1 -Spec "output/<Name>/report-spec.json"`
    `ERROR n:` lines name the spec path (e.g. `pages[0].visuals[2].fields.Y[0]`) → Edit that spot, rebuild. `WARN:` lines are informational. Success prints `BUILT … (tables= measures= pages= visuals=)`.
-6. **HANDOFF** (Korean, ≤ 12 lines): what was built (pages → visuals, measures), assumptions, then:
+6. **HANDOFF** (Korean, ≤ 12 lines): what was built (pages → visuals, measures), assumptions, then (also mention once: the project's `DataFolder` parameter points at this PC's `rawdata`; on another PC use **Home > Transform data > Edit parameters** to change it, or share the `.pbix`):
    > `output/<Name>/<Name>.pbip` 을 더블클릭해 Power BI Desktop에서 열고 **Refresh**(새로 고침)를 누른 뒤, **File > Save As**로 `.pbix`로 저장하세요. 수정하고 싶은 점을 말씀해 주시면 바로 반영합니다.
 7. **GUIDE?** — ask: "같은 리포트를 Power BI Desktop에서 직접 만드는 방법을 정리한 가이드(manual-guide.md)도 만들어 드릴까요?" If yes, run:
    `powershell -NoProfile -ExecutionPolicy Bypass -File .claude/skills/powerbi/scripts/build-guide.ps1 -Spec "output/<Name>/report-spec.json"`
