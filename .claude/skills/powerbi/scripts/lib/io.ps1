@@ -1,4 +1,4 @@
-# io.ps1 — file writing, identifiers, paths. Dot-source from scripts.
+﻿# io.ps1 — file writing, identifiers, paths. Dot-source from scripts.
 $ErrorActionPreference = 'Stop'
 
 function Write-Utf8File {

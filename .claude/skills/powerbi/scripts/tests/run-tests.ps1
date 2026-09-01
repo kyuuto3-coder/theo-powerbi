@@ -1,4 +1,4 @@
-# Minimal test harness (no Pester dependency). Runs every *.test.ps1 in this folder.
+﻿# Minimal test harness (no Pester dependency). Runs every *.test.ps1 in this folder.
 param([string]$Filter = '*')
 $ErrorActionPreference = 'Stop'
 $script:TestsRun = 0; $script:TestsFailed = 0; $script:Failures = New-Object System.Collections.Generic.List[string]

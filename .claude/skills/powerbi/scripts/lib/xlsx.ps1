@@ -1,4 +1,4 @@
-# xlsx.ps1 — minimal .xlsx reader (zip + XML). No Excel, no modules.
+﻿# xlsx.ps1 — minimal .xlsx reader (zip + XML). No Excel, no modules.
 # Read-XlsxWorkbook returns @{ Sheets = @( @{ Name; FirstRow; FirstCol; LastRow; LastCol; Rows = @( @{ R=<absRow>; Cells=@{ <colIndex> = <value> } } ) } ) }
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.IO.Compression.FileSystem

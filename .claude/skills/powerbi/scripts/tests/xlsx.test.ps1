@@ -1,4 +1,4 @@
-. (Join-Path $libDir 'io.ps1')
+﻿. (Join-Path $libDir 'io.ps1')
 . (Join-Path $libDir 'xlsx.ps1')
 
 Test-Case 'ConvertFrom-ColumnLetters maps A, Z, AA, AB' {

@@ -1,4 +1,4 @@
-. (Join-Path $libDir 'io.ps1')
+﻿. (Join-Path $libDir 'io.ps1')
 
 Test-Case 'Write-Utf8File writes UTF-8 without BOM and CRLF' {
     $p = Join-Path $tmpRoot 'a\b\c.txt'
