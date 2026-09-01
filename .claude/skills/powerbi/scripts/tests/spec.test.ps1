@@ -57,3 +57,32 @@ Test-Case 'Get-GridPosition converts the 12x8 grid into pixels' {
     $q = Get-GridPosition -Grid @(6, 1, 6, 4)
     Assert-Equal 970 $q.x; Assert-Equal 168 $q.y; Assert-Equal 910 $q.width; Assert-Equal 490 $q.height
 }
+
+Test-Case 'advanced spec: filePattern table, composite-key relationship creates hidden key columns' {
+    $spec = Read-Spec -Path (Join-Path $fixtures 'spec-advanced.json')
+    $v = Get-SpecValidation -Spec $spec -RawDataDir $fixtures
+    Assert-Equal 0 $v.Errors.Count ($v.Errors -join ' | ')
+    $m = $v.Model
+    Assert-Equal 'orders_*.csv' $m.Tables['Orders'].FilePattern
+    $key = $m.Tables['Targets'].Columns | Where-Object { $_.Name -eq '_key_Month_Region Code' }
+    Assert-True ($null -ne $key) 'composite key column on Targets'
+    Assert-True ($key.Key -and $key.Hidden -and $key.Type -eq 'text') 'hidden text key'
+    Assert-Equal 'Month,Region Code' ($key.Composite -join ',')
+    $fkey = $m.Tables['SalesMonthly'].Columns | Where-Object { $_.Name -eq '_key_Month_Region Code' }
+    Assert-True ($null -ne $fkey -and -not $fkey.Key) 'many-side key column, not marked key'
+    $rel = $m.Relationships | Where-Object { $_.FromTable -eq 'SalesMonthly' }
+    Assert-Equal '_key_Month_Region Code' $rel.FromColumn; Assert-Equal 'Targets' $rel.ToTable; Assert-Equal '_key_Month_Region Code' $rel.ToColumn
+    Assert-Equal 5 $m.Tables.Count
+    Assert-Equal 'Column' (Resolve-FieldRef -Model $m -Ref 'Targets._key_Month_Region Code').Kind
+}
+Test-Case 'advanced spec validation: mismatched composite sides, bad pattern, both file and pattern' {
+    $spec = Read-Spec -Path (Join-Path $fixtures 'spec-advanced.json')
+    $spec.relationships[1].to = 'Targets.Month'
+    $spec.tables[0].filePattern = 'nomatch_*.csv'
+    $spec.tables[1] | Add-Member -NotePropertyName filePattern -NotePropertyValue 'cust*.csv'
+    $v = Get-SpecValidation -Spec $spec -RawDataDir $fixtures
+    $all = $v.Errors -join "`n"
+    Assert-Match 'relationships\[1\]: from and to must have the same number' $all
+    Assert-Match 'tables\[0\]\.filePattern: no file' $all
+    Assert-Match 'tables\[1\]: use either file or filePattern' $all
+}

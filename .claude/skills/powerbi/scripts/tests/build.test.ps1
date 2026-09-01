@@ -71,3 +71,16 @@ Test-Case 'rebuild replaces definition folders but keeps .pbi caches' {
     $log2 = (& $buildScript -Spec (Join-Path $fixtures 'spec-flat.json') -RawData $fixtures -OutputDir $flatOut -Force | Out-String)
     Assert-True (-not (Test-Path $cache)) '-Force removes caches too'
 }
+
+Test-Case 'build of spec-advanced: multi-file table, value-matched and composite relationships' {
+    $out = Join-Path $tmpRoot 'adv'
+    $log = (& $buildScript -Spec (Join-Path $fixtures 'spec-advanced.json') -RawData $fixtures -OutputDir $out | Out-String)
+    Assert-Equal 0 $LASTEXITCODE $log
+    Assert-Match 'tables=5 measures=3 pages=1 visuals=4' $log
+    $rels = [IO.File]::ReadAllText((Join-Path $out 'AdvancedStar.SemanticModel/definition/relationships.tmdl'))
+    Assert-Match "fromColumn: Orders\.'Customer No'\r?\n\ttoColumn: Customers\.'Customer ID'" $rels
+    Assert-Match "fromColumn: SalesMonthly\.'_key_Month_Region Code'\r?\n\ttoColumn: Targets\.'_key_Month_Region Code'" $rels
+    Assert-Match "fromColumn: Orders\.'Order Date'\r?\n\ttoColumn: Calendar\.Date" $rels
+    $orders = [IO.File]::ReadAllText((Join-Path $out 'AdvancedStar.SemanticModel/definition/tables/Orders.tmdl'))
+    Assert-Match 'Folder\.Files\(DataFolder\)' $orders
+}

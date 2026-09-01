@@ -36,4 +36,27 @@ with open(os.path.join(HERE, "sales_cp949.csv"), "w", encoding="cp949", newline=
     for i in range(30):
         d = datetime.date(2025, 1, 1) + datetime.timedelta(days=i * 7)
         w.writerow([d.isoformat(), random.randint(1, 4), random.choice(["A", "B", "C"]), random.randint(1, 20), round(random.uniform(1000, 90000), 2)])
+
+# --- advanced: differently named keys, composite keys, same-structure monthly files
+with open(os.path.join(HERE, "customers.csv"), "w", encoding="utf-8", newline="") as f:
+    w = csv.writer(f); w.writerow(["고객ID", "고객명", "등급"])
+    for cid in range(1001, 1021):
+        w.writerow([cid, f"고객{cid}", random.choice(["Gold", "Silver", "Bronze"])])
+for month in ("2025-01", "2025-02"):
+    with open(os.path.join(HERE, f"orders_{month}.csv"), "w", encoding="utf-8", newline="") as f:
+        w = csv.writer(f); w.writerow(["order_id", "order_date", "cust_no", "amount"])
+        base = 5000 if month == "2025-01" else 6000
+        for i in range(25):
+            d = datetime.date(int(month[:4]), int(month[5:]), 1) + datetime.timedelta(days=random.randint(0, 27))
+            w.writerow([base + i, d.isoformat(), random.randint(1001, 1020), round(random.uniform(10, 500), 2)])
+with open(os.path.join(HERE, "targets.csv"), "w", encoding="utf-8", newline="") as f:
+    w = csv.writer(f); w.writerow(["월", "지역코드", "목표"])
+    for m in (1, 2, 3):
+        for r in (1, 2, 3, 4):
+            w.writerow([m, r, random.randint(10000, 50000)])
+with open(os.path.join(HERE, "sales_monthly.csv"), "w", encoding="utf-8", newline="") as f:
+    w = csv.writer(f); w.writerow(["월", "지역코드", "제품", "수량"])
+    for i in range(40):
+        w.writerow([random.randint(1, 3), random.randint(1, 4), random.choice(["A", "B", "C"]), random.randint(1, 30)])
+print("advanced fixtures written")
 print("fixtures written to", HERE)

@@ -1,4 +1,4 @@
-# report-spec.json — contract
+﻿# report-spec.json — contract
 
 One JSON file per report at `output/<Name>/report-spec.json`. The builder validates it and emits the PBIP. Keys marked * are required.
 
@@ -9,7 +9,8 @@ One JSON file per report at `output/<Name>/report-spec.json`. The builder valida
   "autoDateTable": true,            // add a Calendar table for date columns not linked to a date dimension
   "tables*": [{
     "name*": "Sales",               // model table name; no "."; "Calendar" is reserved
-    "file*": "sales.csv",           // file inside rawdata/
+    "file": "sales.csv",            // file inside rawdata/ — OR:
+    "filePattern": "sales_*.csv",   // several files with identical columns → one table; exactly one *; new files load on Refresh
     "sheet": "Data",                // xlsx only (required for xlsx)
     "headerRow": 1,                 // from the profile: header_row
     "encoding": 65001,              // csv only: 65001 or 949, from the profile
@@ -26,7 +27,10 @@ One JSON file per report at `output/<Name>/report-spec.json`. The builder valida
       "sortBy": "MonthNo"           // sort this column by another column of the same table
     }]
   }],
-  "relationships": [{ "from*": "Sales.CityKey", "to*": "City.CityKey", "active": true, "crossFilter": "single" }],
+  "relationships": [
+    { "from*": "Sales.CityKey", "to*": "City.CityKey", "active": true, "crossFilter": "single" },   // names may differ; use the profile's KEY MATCHES
+    { "from": ["Sales.Month", "Sales.Region Code"], "to": ["Targets.Month", "Targets.Region Code"] }   // composite key: arrays, same length/order; builder adds hidden "_key_Month_Region Code" columns
+  ],
   "measures": [{ "table*": "Sales", "name*": "Revenue", "dax*": "SUM(Sales[Amount])", "format": "#,0", "description": "" }],
   "pages*": [{
     "name*": "Overview",

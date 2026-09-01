@@ -1,4 +1,4 @@
-# Power BI Skill — Design Spec
+﻿# Power BI Skill — Design Spec
 
 **Date:** 2026-09-01
 **Repo:** https://github.com/kyuuto3-coder/theo-powerbi (this folder is the repo root)
@@ -197,6 +197,13 @@ Detection rules:
 - Dictionary sheet: ≤ 3 non-empty columns, ≤ 60 rows, header contains name/description-like words (`name|field|column|컬럼|항목` and `desc|설명|meaning`), or > 70 % of first-column values equal a header in another sheet.
 - Key candidate: distinct == non-null == sampled rows (`KEY` when the sample covers the whole table, `KEY?` otherwise). Star candidate: for every pair of tables, a column whose normalized name (letters/digits only, case-insensitive) matches a column that is unique on the other side. Claude confirms the match from the profile; no containment scan is done (keeps the profiler fast on 100k+ row files).
 - xlsx is read via `System.IO.Compression` + XML (no Excel COM, no modules). Shared strings and styles are parsed once per workbook.
+
+## 6b. Multi-file capabilities (added 2026-09-01 after review)
+
+- **Value-based key matching**: `KEY MATCHES` lists `many.col -> one.key (NN% of sampled values found)` using canonical value overlap, so differently named keys (`cust_no` → `고객ID`) are found. Different-name matches require both names to look like ids or a key with ≥ 20 distinct values (guards against tiny code ranges). Unique-key columns of tables larger than the sample are re-read in full (up to 400k rows) so containment is exact.
+- **Composite keys**: when a table has no single unique column, the profiler searches 2–3 column combinations among low-cardinality dimension-like columns and prints `KEY (composite): A + B`; matches against other tables' tuples are reported as `composite key`. The spec accepts arrays on both sides of a relationship; the builder adds hidden text columns `_key_<parts>` (M `Text.Combine`) on both tables and relates them (Power BI relationships are single-column).
+- **Same-structure files**: `GROUPS` lists files with identical headers and a `filePattern`; the spec's `filePattern` (one `*`) makes the builder emit `Folder.Files(DataFolder)` + `Table.Combine`, so new files matching the pattern load on Refresh.
+- Column cap raised from 25 to 200 per table.
 
 ## 7. Schema modes
 

@@ -56,3 +56,14 @@ Test-Case 'build-guide.ps1 writes manual-guide.md next to the spec' {
     Assert-Match 'GUIDE .*manual-guide\.md' $log
     $bytes = [IO.File]::ReadAllBytes((Join-Path $dir 'manual-guide.md')); Assert-Equal 0x23 $bytes[0] 'starts with # (no BOM)'
 }
+
+Test-Case 'New-ManualGuide: folder combine and composite key steps' {
+    $m = Get-SpecModel -Spec (Read-Spec -Path (Join-Path $fixtures 'spec-advanced.json'))
+    $g = New-ManualGuide -Model $m -RawDataDir 'C:\work\rawdata'
+    Assert-Match '### 1\.1 테이블 `Orders` ← `orders_\*\.csv` \(여러 파일\)' $g
+    Assert-Match '\*\*Home > Get Data > Folder\*\*' $g
+    Assert-Match '\*\*Text Filters > Begins With…\*\* `orders_`' $g
+    Assert-Match '\*\*Combine Files\*\*' $g
+    Assert-Match '\*\*Add Column > Custom Column\*\* → \*\*New column name\*\* `_key_Month_Region Code`, \*\*Custom column formula\*\* `= Text\.Combine\(\{Text\.From\(\[Month\]\), Text\.From\(\[Region Code\]\)\}, "\|"\)`' $g
+    Assert-True (-not ($g -match 'Choose Columns\*\* → 다음 열만 체크: [^\n]*_key_')) 'key column is not in Choose Columns'
+}

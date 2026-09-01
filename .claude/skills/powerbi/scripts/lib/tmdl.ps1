@@ -14,33 +14,55 @@ function Get-TmdlDataType {
     switch ($Type) { 'int64' { 'int64' } 'double' { 'double' } 'decimal' { 'decimal' } 'date' { 'dateTime' } 'datetime' { 'dateTime' } 'boolean' { 'boolean' } default { 'string' } }
 }
 
+function Get-MReader {
+    # M expression that turns a binary ($Binary) into the raw sheet/csv table for this table's source type.
+    param($Table, [string]$Binary)
+    if ($Table.IsXlsx) { return 'Excel.Workbook(' + $Binary + ', null, true){[Item=' + (ConvertTo-MString ([string]$Table.Sheet)) + ',Kind="Sheet"]}[Data]' }
+    $delim = if ($Table.Delimiter -eq "`t") { '#(tab)' } else { ([string]$Table.Delimiter).Replace('"', '""') }
+    return 'Csv.Document(' + $Binary + ',[Delimiter="' + $delim + '", Encoding=' + $Table.Encoding + ', QuoteStyle=QuoteStyle.Csv])'
+}
+
 function New-MQuery {
-    # Returns the M query as an array of lines (unindented).
+    # Returns the M query as an array of lines (unindented). Steps: Source → (Skip) → Promoted → Selected → (Renamed) → Typed → (composite key columns).
     param([Parameter(Mandatory)]$Table)
-    $l = New-Object System.Collections.Generic.List[string]
-    $fileRef = 'DataFolder & ' + (ConvertTo-MString ('\' + [string]$Table.File))
-    $l.Add('let')
-    if ($Table.IsXlsx) {
-        $l.Add('    Source = Excel.Workbook(File.Contents(' + $fileRef + '), null, true),')
-        $l.Add('    Sheet = Source{[Item=' + (ConvertTo-MString ([string]$Table.Sheet)) + ',Kind="Sheet"]}[Data],')
-        $prev = 'Sheet'
+    $steps = New-Object System.Collections.Generic.List[object]   # @( @{ Name; Expr } )
+    $src = @($Table.Columns | Where-Object { $null -ne $_.Source })
+    $comp = @($Table.Columns | Where-Object { $null -eq $_.Source -and $_.Composite })
+    $skip = $Table.HeaderRow - 1
+    if ($Table.FilePattern) {
+        $parts = ([string]$Table.FilePattern).Split('*')
+        $steps.Add(@{ Name = 'Files'; Expr = 'Folder.Files(DataFolder)' })
+        $steps.Add(@{ Name = 'Matched'; Expr = 'Table.SelectRows(Files, each Text.StartsWith([Name], ' + (ConvertTo-MString $parts[0]) + ') and Text.EndsWith([Name], ' + (ConvertTo-MString $parts[1]) + '))' })
+        $perFile = Get-MReader -Table $Table -Binary '[Content]'
+        if ($skip -gt 0) { $perFile = 'Table.Skip(' + $perFile + ', ' + $skip + ')' }
+        $steps.Add(@{ Name = 'Loaded'; Expr = 'Table.AddColumn(Matched, "Data", each Table.PromoteHeaders(' + $perFile + ', [PromoteAllScalars=true]))' })
+        $steps.Add(@{ Name = 'Promoted'; Expr = 'Table.Combine(Loaded[Data])' })
     } else {
-        $delim = if ($Table.Delimiter -eq "`t") { '#(tab)' } else { ([string]$Table.Delimiter).Replace('"', '""') }
-        $l.Add('    Source = Csv.Document(File.Contents(' + $fileRef + '),[Delimiter="' + $delim + '", Encoding=' + $Table.Encoding + ', QuoteStyle=QuoteStyle.Csv]),')
+        $fileRef = 'File.Contents(DataFolder & ' + (ConvertTo-MString ('\' + [string]$Table.File)) + ')'
+        $steps.Add(@{ Name = 'Source'; Expr = (Get-MReader -Table $Table -Binary $fileRef) })
         $prev = 'Source'
+        if ($skip -gt 0) { $steps.Add(@{ Name = 'Skipped'; Expr = 'Table.Skip(Source, ' + $skip + ')' }); $prev = 'Skipped' }
+        $steps.Add(@{ Name = 'Promoted'; Expr = 'Table.PromoteHeaders(' + $prev + ', [PromoteAllScalars=true])' })
     }
-    if ($Table.HeaderRow -gt 1) { $l.Add('    Skipped = Table.Skip(' + $prev + ', ' + ($Table.HeaderRow - 1) + '),'); $prev = 'Skipped' }
-    $l.Add('    Promoted = Table.PromoteHeaders(' + $prev + ', [PromoteAllScalars=true]),')
-    $sel = @($Table.Columns | ForEach-Object { ConvertTo-MString $_.Source }) -join ', '
-    $l.Add('    Selected = Table.SelectColumns(Promoted, {' + $sel + '}),')
+    $sel = @($src | ForEach-Object { ConvertTo-MString $_.Source }) -join ', '
+    $steps.Add(@{ Name = 'Selected'; Expr = 'Table.SelectColumns(Promoted, {' + $sel + '})' })
     $prev = 'Selected'
     # -cne: M is case-sensitive, so a case-only rename (price -> Price) must still be emitted
-    $renames = @($Table.Columns | Where-Object { $_.Source -cne $_.Name } | ForEach-Object { '{' + (ConvertTo-MString $_.Source) + ', ' + (ConvertTo-MString $_.Name) + '}' })
-    if ($renames.Count -gt 0) { $l.Add('    Renamed = Table.RenameColumns(Selected, {' + ($renames -join ', ') + '}),'); $prev = 'Renamed' }
-    $types = @($Table.Columns | ForEach-Object { '{' + (ConvertTo-MString $_.Name) + ', ' + (Get-MType $_.Type) + '}' }) -join ', '
-    $l.Add('    Typed = Table.TransformColumnTypes(' + $prev + ', {' + $types + '})')
+    $renames = @($src | Where-Object { $_.Source -cne $_.Name } | ForEach-Object { '{' + (ConvertTo-MString $_.Source) + ', ' + (ConvertTo-MString $_.Name) + '}' })
+    if ($renames.Count -gt 0) { $steps.Add(@{ Name = 'Renamed'; Expr = 'Table.RenameColumns(Selected, {' + ($renames -join ', ') + '})' }); $prev = 'Renamed' }
+    $types = @($src | ForEach-Object { '{' + (ConvertTo-MString $_.Name) + ', ' + (Get-MType $_.Type) + '}' }) -join ', '
+    $steps.Add(@{ Name = 'Typed'; Expr = 'Table.TransformColumnTypes(' + $prev + ', {' + $types + '})' })
+    $prev = 'Typed'; $n = 0
+    foreach ($c in $comp) {
+        $n++
+        $combine = 'Text.Combine({' + (@($c.Composite | ForEach-Object { 'Text.From([' + $_ + '])' }) -join ', ') + '}, "|")'
+        $steps.Add(@{ Name = "WithKey$n"; Expr = 'Table.AddColumn(' + $prev + ', ' + (ConvertTo-MString $c.Name) + ', each ' + $combine + ', type text)' }); $prev = "WithKey$n"
+    }
+    $l = New-Object System.Collections.Generic.List[string]
+    $l.Add('let')
+    for ($i = 0; $i -lt $steps.Count; $i++) { $comma = if ($i -lt $steps.Count - 1) { ',' } else { '' }; $l.Add('    ' + $steps[$i].Name + ' = ' + $steps[$i].Expr + $comma) }
     $l.Add('in')
-    $l.Add('    Typed')
+    $l.Add('    ' + $prev)
     return $l.ToArray()
 }
 

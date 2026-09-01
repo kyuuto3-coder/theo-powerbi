@@ -10,9 +10,8 @@ Test-Case 'Format-TmdlName quotes anything that is not a plain identifier' {
 Test-Case 'New-MQuery for xlsx: sheet navigation, select, rename, types' {
     $m = Get-SpecModel -Spec (Read-Spec -Path (Join-Path $fixtures 'spec-flat.json'))
     $q = (New-MQuery -Table $m.Tables['Apps']) -join "`n"
-    Assert-Match 'Source = Excel\.Workbook\(File\.Contents\(DataFolder & "\\apps\.xlsx"\), null, true\),' $q
-    Assert-Match 'Sheet = Source\{\[Item="Data",Kind="Sheet"\]\}\[Data\],' $q
-    Assert-Match 'Promoted = Table\.PromoteHeaders\(Sheet, \[PromoteAllScalars=true\]\),' $q
+    Assert-Match 'Source = Excel\.Workbook\(File\.Contents\(DataFolder & "\\apps\.xlsx"\), null, true\)\{\[Item="Data",Kind="Sheet"\]\}\[Data\],' $q
+    Assert-Match 'Promoted = Table\.PromoteHeaders\(Source, \[PromoteAllScalars=true\]\),' $q
     Assert-Match 'Selected = Table\.SelectColumns\(Promoted, \{"id", "track_name", "size_bytes"' $q
     Assert-Match 'Renamed = Table\.RenameColumns\(Selected, \{\{"track_name", "앱 이름"\}, \{"prime_genre", "장르"\}, \{"release_date", "출시일"\}\}\),' $q
     Assert-Match 'Typed = Table\.TransformColumnTypes\(Renamed, \{\{"id", Int64\.Type\}, \{"앱 이름", type text\}, \{"size_bytes", Int64\.Type\}, \{"price", Currency\.Type\}, \{"rating_count_tot", Int64\.Type\}, \{"user_rating", type number\}, \{"장르", type text\}, \{"출시일", type date\}\}\)' $q
@@ -86,4 +85,21 @@ Test-Case 'Write-SemanticModel writes the full folder' {
     Assert-Match '^expression DataFolder = "(\\\\|[A-Za-z]:\\)[^"]*fixtures" meta \[IsParameterQuery=true, Type="Text", IsParameterQueryRequired=true\]' $expr
     Assert-Equal $r.DataFolder ($expr -replace '(?s)^expression DataFolder = "([^"]*)".*$', '$1')
     Assert-Equal 0 $r.Warnings.Count ($r.Warnings -join ' | ')
+}
+
+Test-Case 'New-MQuery for a filePattern table combines files from DataFolder; composite key adds a column' {
+    $m = Get-SpecModel -Spec (Read-Spec -Path (Join-Path $fixtures 'spec-advanced.json'))
+    $q = (New-MQuery -Table $m.Tables['Orders']) -join "`n"
+    Assert-Match 'Files = Folder\.Files\(DataFolder\),' $q
+    Assert-Match 'Matched = Table\.SelectRows\(Files, each Text\.StartsWith\(\[Name\], "orders_"\) and Text\.EndsWith\(\[Name\], "\.csv"\)\),' $q
+    Assert-Match 'Loaded = Table\.AddColumn\(Matched, "Data", each Table\.PromoteHeaders\(Csv\.Document\(\[Content\],\[Delimiter=",", Encoding=65001, QuoteStyle=QuoteStyle\.Csv\]\), \[PromoteAllScalars=true\]\)\),' $q
+    Assert-Match 'Promoted = Table\.Combine\(Loaded\[Data\]\),' $q
+    Assert-Match 'Selected = Table\.SelectColumns\(Promoted, \{"order_id", "order_date", "cust_no", "amount"\}\),' $q
+    Assert-Match "(?m)^in\r?\n    Typed$" $q
+    $t = (New-MQuery -Table $m.Tables['Targets']) -join "`n"
+    Assert-Match 'Selected = Table\.SelectColumns\(Promoted, \{"월", "지역코드", "목표"\}\),' $t
+    Assert-Match 'WithKey1 = Table\.AddColumn\(Typed, "_key_Month_Region Code", each Text\.Combine\(\{Text\.From\(\[Month\]\), Text\.From\(\[Region Code\]\)\}, "\|"\), type text\)' $t
+    Assert-Match "(?m)^in\r?\n    WithKey1$" $t
+    $tm = New-TableTmdl -Table $m.Tables['Targets'] -Model $m
+    Assert-Match "(?m)^\t/// Composite key: Month \+ Region Code\r?\n\tcolumn '_key_Month_Region Code'\r?\n\t\tdataType: string\r?\n\t\tisHidden\r?\n\t\tisKey" $tm
 }

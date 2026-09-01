@@ -2,7 +2,7 @@
 .SYNOPSIS  Profiles every .csv/.xlsx in rawdata/ into a compact text summary for Claude.
 .EXAMPLE   powershell -NoProfile -ExecutionPolicy Bypass -File .claude/skills/powerbi/scripts/profile-data.ps1
 #>
-param([string]$DataFolder = '', [int]$SampleRows = 2000, [int]$MaxColumns = 25)
+param([string]$DataFolder = '', [int]$SampleRows = 2000, [int]$MaxColumns = 200, [int]$FullReadLimit = 400000)
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 . (Join-Path $PSScriptRoot 'lib/io.ps1')
@@ -19,6 +19,57 @@ if ($files.Count -eq 0) { $lines.Add('  no .csv/.xlsx files found - ask the user
 function ConvertTo-ColumnLetters { param([int]$Index) $s = ''; $n = $Index; while ($n -gt 0) { $r = ($n - 1) % 26; $s = [char](65 + $r) + $s; $n = [int](($n - 1) / 26) }; return $s }
 
 function Format-Cell { param($V) if ($null -eq $V) { return '' } ; $s = [string]$V; if ($s.Length -gt 24) { $s = $s.Substring(0, 22) + '..' }; return $s }
+
+function Get-FullValues {
+    # Re-reads the whole file (up to FullReadLimit rows) and returns the key-string set of one column. Used for unique-key columns of tables larger than the sample.
+    param([string]$Path, [string]$Ext, [int]$CodePage, [string]$Delimiter, [string]$Sheet, [int]$HeaderIndex, [int]$ColIndex)
+    $set = New-Object 'System.Collections.Generic.HashSet[string]'
+    if ($Ext -eq '.csv') {
+        $r = Read-CsvRows -Path $Path -CodePage $CodePage -Delimiter $Delimiter -MaxRows ($FullReadLimit + $HeaderIndex + 1)
+        for ($i = $HeaderIndex + 1; $i -lt $r.Rows.Count; $i++) { $row = $r.Rows[$i]; if ($ColIndex -lt $row.Count) { $k = ConvertTo-KeyString $row[$ColIndex]; if ($null -ne $k) { [void]$set.Add($k) } } }
+    } else {
+        $wb = Read-XlsxWorkbook -Path $Path -MaxRows ($FullReadLimit + 40)
+        $sh = $wb.Sheets | Where-Object { $_.Name -eq $Sheet } | Select-Object -First 1
+        if ($sh) { for ($i = $HeaderIndex + 1; $i -lt $sh.Rows.Count; $i++) { $cells = $sh.Rows[$i].Cells; if ($cells.ContainsKey($ColIndex + 1)) { $k = ConvertTo-KeyString $cells[$ColIndex + 1]; if ($null -ne $k) { [void]$set.Add($k) } } } }
+    }
+    return $set
+}
+
+function Get-CompositeCandidates {
+    # Low-cardinality dimension-like columns (ids, codes, months, categories) that could form a composite key.
+    param($T)
+    $c = @($T.Columns | Where-Object { $_.Name -ne '(unnamed)' -and $_.Profile.Distinct -ge 2 -and -not $_.Profile.IsUnique -and $_.Profile.Type -in 'int64', 'text', 'date' -and ($_.Profile.Type -ne 'int64' -or $_.Profile.Distinct -le [Math]::Max(2, $_.Profile.NonEmpty * 0.5)) } | Sort-Object { -$_.Profile.Distinct } | Select-Object -First 10 | Sort-Object { $_.Index })
+    return [int[]]@($c | ForEach-Object { $_.Index })
+}
+
+function Register-Table {
+    # Builds the matching record for Find-KeyMatches / Find-SameStructureGroups and prints the composite key line when there is no single key.
+    param($T, [string]$Name, [string]$File, $Sheet, [bool]$HasSingleKey, [string]$Ext, [int]$CodePage, [string]$Delimiter, [string]$Path)
+    $dataRows = Get-DataRows $T
+    $cols = New-Object System.Collections.Generic.List[object]
+    foreach ($c in $T.Columns) {
+        $vals = $c.Profile.Values; $unique = $c.Profile.IsUnique
+        if ($unique -and $T.DataRows -gt $T.SampleRows -and $c.Name -ne '(unnamed)') {
+            $vals = Get-FullValues -Path $Path -Ext $Ext -CodePage $CodePage -Delimiter $Delimiter -Sheet ([string]$Sheet) -HeaderIndex $T.HeaderIndex -ColIndex $c.Index
+            $unique = ($vals.Count -ge [Math]::Min($T.DataRows, $FullReadLimit))
+        }
+        $cols.Add(@{ Name = $c.Name; Index = $c.Index; Type = $c.Profile.Type; IsUnique = $unique; Values = $vals })
+    }
+    $composite = $null
+    if (-not $HasSingleKey) {
+        $cand = Get-CompositeCandidates $T
+        if ($cand.Count -ge 2) {
+            $ck = Find-CompositeKey -Rows $dataRows -Candidates $cand
+            if ($null -ne $ck) {
+                $names = @($ck | ForEach-Object { $i = $_; ($T.Columns | Where-Object { $_.Index -eq $i } | Select-Object -First 1).Name })
+                $set = New-Object 'System.Collections.Generic.HashSet[string]'; foreach ($tp in (Get-TupleStrings -Rows $dataRows -Indices $ck)) { [void]$set.Add($tp) }
+                $composite = @{ Indices = $ck; Names = $names; Values = $set }
+                $lines.Add('    KEY (composite): ' + ($names -join ' + ') + '   <- no single unique column; rows are unique on this combination')
+            }
+        }
+    }
+    $tables.Add(@{ Name = $Name; File = $File; Sheet = $Sheet; Rows = $dataRows; Columns = $cols.ToArray(); CompositeKey = $composite })
+}
 
 function Get-DataRows { param($T) if ($T.Grid.Count -le $T.HeaderIndex + 1) { return @() }; return @($T.Grid[($T.HeaderIndex + 1)..($T.Grid.Count - 1)]) }
 
@@ -46,10 +97,11 @@ function Get-GridProfile {
 
 function Add-TableLines {
     param($T, [string]$ColPrefixMode)   # 'letters' for xlsx, 'index' for csv
+    $script:LastHadKey = $false
     $lines.Add(("    {0,-4} {1,-24} {2,-9} {3,-6} {4,-8} {5,-28} {6}" -f 'col', 'name', 'type', 'nulls', 'distinct', 'sample', 'note'))
     $shown = 0
-    $firstUniqueInt = -1
-    foreach ($c in $T.Columns) { if ($c.Profile.IsUnique -and $c.Profile.Type -eq 'int64' -and $c.Name -ne '(unnamed)') { $firstUniqueInt = $c.Index; break } }
+    $firstUniqueInt = -1   # fallback KEY: a unique integer only when it is the first real column (typical id position)
+    foreach ($c in $T.Columns) { if ($c.Name -eq '(unnamed)') { continue }; if ($c.Profile.IsUnique -and $c.Profile.Type -eq 'int64') { $firstUniqueInt = $c.Index }; break }
     foreach ($c in $T.Columns) {
         if ($shown -ge $MaxColumns) { $lines.Add(("    +{0} more columns" -f ($T.Columns.Count - $shown))); break }
         $shown++
@@ -62,6 +114,7 @@ function Add-TableLines {
             if ($T.SampleRows -ge $T.DataRows) { $notes.Add('KEY') } else { $notes.Add('KEY?') } }
         $sample = (@($p.Samples | ForEach-Object { if ($p.Type -eq 'text') { '"' + (Format-Cell $_) + '"' } else { Format-Cell $_ } }) -join ', ')
         $lines.Add(("    {0,-4} {1,-24} {2,-9} {3,-6} {4,-8} {5,-28} {6}" -f $colLabel, (Format-Cell $c.Name), $p.Type, ("{0}%" -f $p.NullPct), $p.Distinct, $sample, ($notes -join ' ')))
+        if ($notes -contains 'KEY' -or $notes -contains 'KEY?') { $script:LastHadKey = $true }
     }
 }
 
@@ -79,7 +132,7 @@ foreach ($f in $files) {
         if ($null -eq $t) { $lines.Add(("FILE ""{0}""  encoding={1}  -> no header row found (skipped)" -f $f.Name, $cp)); continue }
         $lines.Add(("FILE ""{0}""  encoding={1}  delimiter=""{2}""  rows={3}  header_row={4}  -> table candidate" -f $f.Name, $cp, $delimLabel, $t.DataRows, ($t.HeaderIndex + 1)))
         Add-TableLines -T $t -ColPrefixMode 'index'
-        $tables.Add(@{ Name = [IO.Path]::GetFileNameWithoutExtension($f.Name); Columns = @($t.Columns | ForEach-Object { @{ Name = $_.Name; IsUnique = $_.Profile.IsUnique } }) })
+        Register-Table -T $t -Name ([IO.Path]::GetFileNameWithoutExtension($f.Name)) -File $f.Name -Sheet $null -HasSingleKey $script:LastHadKey -Ext '.csv' -CodePage $cp -Delimiter $delim -Path $f.FullName
     }
     else {
         $wb = Read-XlsxWorkbook -Path $f.FullName -MaxRows ($SampleRows + 40)
@@ -118,13 +171,18 @@ foreach ($f in $files) {
             }
             $lines.Add(("  SHEET ""{0}""  rows={1}  header_row={2}  first_col={3}  -> table candidate" -f $s.Name, $t.DataRows, $t.HeaderRowRelative, (ConvertTo-ColumnLetters ($t.FirstCol + 1))))
             Add-TableLines -T $t -ColPrefixMode 'letters'
-            $tables.Add(@{ Name = $s.Name; Columns = @($t.Columns | ForEach-Object { @{ Name = $_.Name; IsUnique = $_.Profile.IsUnique } }) })
+            Register-Table -T $t -Name $s.Name -File $f.Name -Sheet $s.Name -HasSingleKey $script:LastHadKey -Ext $f.Extension -CodePage 0 -Delimiter '' -Path $f.FullName
         }
     }
 }
 if ($tables.Count -ge 2) {
+    $groups = @(Find-SameStructureGroups -Tables $tables.ToArray())
+    if ($groups.Count -gt 0) {
+        $lines.Add('GROUPS (identical columns -> load as ONE table with "filePattern"; new files matching the pattern are picked up on Refresh):')
+        foreach ($g in $groups) { $sheetNote = if ($g.Sheet) { '  sheet "' + $g.Sheet + '"' } else { '' }; $lines.Add('    filePattern "' + $g.Pattern + '"' + $sheetNote + '  <- ' + ($g.Files -join ', ')) }
+    }
     $matches = @(Find-KeyMatches -Tables $tables.ToArray())
-    $lines.Add('KEY MATCHES (star candidates; same column name, one side unique):')
+    $lines.Add('KEY MATCHES (many-side column -> unique key; % = share of sampled values found on the key side; >= 90% is a safe relationship):')
     if ($matches.Count -eq 0) { $lines.Add('    none - treat tables as independent (flat) unless the user says otherwise') }
     foreach ($m in $matches) { $lines.Add('    ' + $m) }
 }

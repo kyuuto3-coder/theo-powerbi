@@ -33,6 +33,27 @@ function Read-Spec {
 
 function Get-DefaultSummarize { param([string]$Type, [bool]$Key) if ($Key) { return 'none' }; if ($Type -in 'int64', 'double', 'decimal') { return 'sum' }; return 'none' }
 
+function Resolve-KeySide {
+    # One side of a relationship. Single ref → its table/column. Several refs (composite key) → adds a hidden text column '_key_<parts>' to the table (once) and returns it.
+    param($Tables, [string[]]$Refs, [bool]$IsKey)
+    $parts = New-Object System.Collections.Generic.List[string]; $table = $null
+    foreach ($ref in $Refs) {
+        $i = $ref.IndexOf('.'); if ($i -lt 1) { return $null }
+        $tn = $ref.Substring(0, $i); $cn = $ref.Substring($i + 1)
+        if ($null -eq $table) { $table = $tn } elseif ($table -ne $tn) { return $null }
+        $parts.Add($cn)
+    }
+    if (-not $Tables.Contains($table)) { return $null }
+    if ($parts.Count -eq 1) { return @{ Table = $table; Column = $parts[0] } }
+    $keyName = '_key_' + ($parts -join '_')
+    $exists = $false; foreach ($c in $Tables[$table].Columns) { if ($c.Name -eq $keyName) { $exists = $true } }
+    if (-not $exists) {
+        $Tables[$table].Columns = @($Tables[$table].Columns) + @(@{ Source = $null; Name = $keyName; Type = 'text'; Key = $IsKey; Hidden = $true; Format = $null; SummarizeBy = 'none'
+                                                                     Description = ('Composite key: ' + ($parts -join ' + ')); SortBy = $null; Composite = $parts.ToArray() })
+    }
+    return @{ Table = $table; Column = $keyName }
+}
+
 function Get-SpecModel {
     # Builds the normalized model. Tolerant: invalid entries are skipped here and reported by Get-SpecValidation.
     param([Parameter(Mandatory)]$Spec)
@@ -51,9 +72,10 @@ function Get-SpecModel {
                          Format = (Get-Prop $c 'format' $null); SummarizeBy = [string](Get-Prop $c 'summarizeBy' (Get-DefaultSummarize $type $key))
                          Description = (Get-Prop $c 'description' $null); SortBy = (Get-Prop $c 'sortBy' $null) })
         }
-        $tables[$name] = @{ Name = $name; File = $file; Sheet = (Get-Prop $t 'sheet' $null); HeaderRow = [int](Get-Prop $t 'headerRow' 1)
+        $pattern = [string](Get-Prop $t 'filePattern' '')
+        $tables[$name] = @{ Name = $name; File = $file; FilePattern = $pattern; Sheet = (Get-Prop $t 'sheet' $null); HeaderRow = [int](Get-Prop $t 'headerRow' 1)
                             Encoding = [int](Get-Prop $t 'encoding' 65001); Delimiter = [string](Get-Prop $t 'delimiter' ',')
-                            IsXlsx = ($file -match '(?i)\.xls[xm]$'); Columns = $cols.ToArray(); Measures = @(); IsCalculated = $false }
+                            IsXlsx = (($file + $pattern) -match '(?i)\.xls[xm]$'); Columns = $cols.ToArray(); Measures = @(); IsCalculated = $false }
     }
     foreach ($m in (ConvertTo-Array (Get-Prop $Spec 'measures'))) {
         $tn = [string](Get-Prop $m 'table' '')
@@ -62,10 +84,12 @@ function Get-SpecModel {
     }
     $rels = New-Object System.Collections.Generic.List[object]
     foreach ($r in (ConvertTo-Array (Get-Prop $Spec 'relationships'))) {
-        $from = [string](Get-Prop $r 'from' ''); $to = [string](Get-Prop $r 'to' '')
-        $fi = $from.IndexOf('.'); $ti = $to.IndexOf('.')
-        if ($fi -lt 1 -or $ti -lt 1) { continue }
-        $rels.Add(@{ FromTable = $from.Substring(0, $fi); FromColumn = $from.Substring($fi + 1); ToTable = $to.Substring(0, $ti); ToColumn = $to.Substring($ti + 1)
+        $fromRefs = @(ConvertTo-Array (Get-Prop $r 'from') | ForEach-Object { [string]$_ }); $toRefs = @(ConvertTo-Array (Get-Prop $r 'to') | ForEach-Object { [string]$_ })
+        if ($fromRefs.Count -eq 0 -or $toRefs.Count -eq 0 -or $fromRefs.Count -ne $toRefs.Count) { continue }
+        $fromSide = Resolve-KeySide -Tables $tables -Refs $fromRefs -IsKey $false
+        $toSide = Resolve-KeySide -Tables $tables -Refs $toRefs -IsKey $true
+        if ($null -eq $fromSide -or $null -eq $toSide) { continue }
+        $rels.Add(@{ FromTable = $fromSide.Table; FromColumn = $fromSide.Column; ToTable = $toSide.Table; ToColumn = $toSide.Column
                      Active = [bool](Get-Prop $r 'active' $true); CrossFilter = [string](Get-Prop $r 'crossFilter' 'single') })
     }
     # Calendar table
@@ -142,8 +166,14 @@ function Get-SpecValidation {
         if ($tn -eq 'Calendar') { $errors.Add("$p.name: 'Calendar' is reserved for the auto date table") }
         if ($tn.Contains('.')) { $errors.Add("$p.name: table names may not contain '.'") }
         if ($seenTables.ContainsKey($tn)) { $errors.Add("$p.name: duplicate table name '$tn'") }; $seenTables[$tn] = $true
-        $file = [string](Get-Prop $t 'file' '')
-        if (-not $file) { $errors.Add("$p.file: required") }
+        $file = [string](Get-Prop $t 'file' ''); $pattern = [string](Get-Prop $t 'filePattern' '')
+        if (-not $file -and -not $pattern) { $errors.Add("$p.file: required (or filePattern)") }
+        elseif ($file -and $pattern) { $errors.Add("${p}: use either file or filePattern, not both") }
+        elseif ($pattern) {
+            if (($pattern.Split('*').Count - 1) -ne 1) { $errors.Add("$p.filePattern: must contain exactly one * (e.g. orders_*.csv)") }
+            elseif (@(Get-ChildItem -LiteralPath $RawDataDir -File -Filter $pattern -ErrorAction SilentlyContinue).Count -eq 0) { $errors.Add("$p.filePattern: no file in $RawDataDir matches '$pattern'") }
+            elseif ($pattern -match '(?i)\.xls[xm]$' -and -not (Get-Prop $t 'sheet' $null)) { $errors.Add("$p.sheet: required for Excel files") }
+        }
         elseif (-not (Test-Path -LiteralPath (Join-Path $RawDataDir $file))) { $errors.Add("$p.file: '$file' not found in $RawDataDir") }
         elseif ($file -match '(?i)\.xls[xm]$' -and -not (Get-Prop $t 'sheet' $null)) { $errors.Add("$p.sheet: required for Excel files") }
         $cols = ConvertTo-Array (Get-Prop $t 'columns')
@@ -176,10 +206,29 @@ function Get-SpecValidation {
     $relsRaw = ConvertTo-Array (Get-Prop $Spec 'relationships')
     for ($ri = 0; $ri -lt $relsRaw.Count; $ri++) {
         $p = "relationships[$ri]"
+        $fromRefs = @(ConvertTo-Array (Get-Prop $relsRaw[$ri] 'from') | ForEach-Object { [string]$_ }); $toRefs = @(ConvertTo-Array (Get-Prop $relsRaw[$ri] 'to') | ForEach-Object { [string]$_ })
+        if ($fromRefs.Count -eq 0) { $errors.Add("$p.from: required") }; if ($toRefs.Count -eq 0) { $errors.Add("$p.to: required") }
+        if ($fromRefs.Count -gt 0 -and $toRefs.Count -gt 0 -and $fromRefs.Count -ne $toRefs.Count) { $errors.Add("${p}: from and to must have the same number of columns (composite keys pair up position by position)") }
+        $sides = @{ from = $fromRefs; to = $toRefs }
         foreach ($side in 'from', 'to') {
-            $ref = [string](Get-Prop $relsRaw[$ri] $side '')
-            try { $r = Resolve-FieldRef -Model $model -Ref $ref; if ($r.Kind -ne 'Column') { $errors.Add("$p.${side}: must reference a column") } }
-            catch { $errors.Add("$p.${side}: " + $_.Exception.Message) }
+            $tablesSeen = @{}
+            for ($k = 0; $k -lt $sides[$side].Count; $k++) {
+                $ref = $sides[$side][$k]
+                try {
+                    $r = Resolve-FieldRef -Model $model -Ref $ref
+                    if ($r.Kind -ne 'Column') { $errors.Add("$p.${side}[$k]: must reference a column") }
+                    $tablesSeen[$r.Table] = $true
+                } catch { $errors.Add("$p.${side}[$k]: " + $_.Exception.Message) }
+            }
+            if ($tablesSeen.Count -gt 1) { $errors.Add("$p.${side}: all columns of a composite key must belong to the same table") }
+        }
+        if ($fromRefs.Count -eq $toRefs.Count) {
+            for ($k = 0; $k -lt $fromRefs.Count; $k++) {
+                try { $a = Resolve-FieldRef -Model $model -Ref $fromRefs[$k]; $b = Resolve-FieldRef -Model $model -Ref $toRefs[$k]
+                      $ga = if ($a.Type -in 'int64','double','decimal') { 'number' } elseif ($a.Type -in 'date','datetime') { 'date' } else { $a.Type }
+                      $gb = if ($b.Type -in 'int64','double','decimal') { 'number' } elseif ($b.Type -in 'date','datetime') { 'date' } else { $b.Type }
+                      if ($ga -ne $gb -and $a.Type -and $b.Type) { $warnings.Add("${p}: '$($fromRefs[$k])' ($($a.Type)) and '$($toRefs[$k])' ($($b.Type)) have different types; values may not match") } } catch { }
+            }
         }
     }
     $pagesRaw = ConvertTo-Array (Get-Prop $Spec 'pages')

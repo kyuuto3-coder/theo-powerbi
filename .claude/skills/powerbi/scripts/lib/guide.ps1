@@ -48,9 +48,17 @@ function New-ManualGuide {
     $i = 0
     foreach ($tn in $sourceTables) {
         $t = $Model.Tables[$tn]; $i++
-        $src = if ($t.IsXlsx) { "``$($t.File)`` / 시트 ``$($t.Sheet)``" } else { "``$($t.File)``" }
+        $srcCols = @($t.Columns | Where-Object { $null -ne $_.Source }); $compCols = @($t.Columns | Where-Object { $null -eq $_.Source -and $_.Composite })
+        $fileLabel = if ($t.FilePattern) { "``$($t.FilePattern)`` (여러 파일)" } else { "``$($t.File)``" }
+        $src = if ($t.IsXlsx) { "$fileLabel / 시트 ``$($t.Sheet)``" } else { $fileLabel }
         $l.Add("### 1.$i 테이블 ``$tn`` ← $src")
-        if ($t.IsXlsx) {
+        if ($t.FilePattern) {
+            $pp = ([string]$t.FilePattern).Split('*')
+            $l.Add("1. **Home > Get Data > Folder** → 폴더 경로에 ``$RawDataDir`` 입력 → **OK**.")
+            $l.Add("2. 파일 목록 창에서 **Transform Data** → **Power Query Editor**에서 **Name** 열의 필터 ▾ → **Text Filters > Begins With…** ``$($pp[0])`` 로 ``$($t.FilePattern)`` 파일만 남깁니다.")
+            $sampleNote = if ($t.IsXlsx) { "시트 **$($t.Sheet)** 선택" } else { "**File Origin**/**Delimiter** 확인" }
+            $l.Add("3. **Content** 열 머리글의 **Combine Files** 버튼 클릭 → 샘플 파일 창에서 $sampleNote → **OK**. (같은 구조의 파일이 하나의 표로 합쳐지며, 나중에 같은 이름 규칙의 파일을 폴더에 넣으면 **Refresh**만으로 반영됩니다.)")
+        } elseif ($t.IsXlsx) {
             $l.Add("1. **Home > Get Data > Excel Workbook** → ``$($t.File)`` 선택 → **Open**.")
             $l.Add("2. **Navigator**에서 시트 **$($t.Sheet)**를 체크하고 **Transform Data**를 클릭합니다.")
         } else {
@@ -59,13 +67,18 @@ function New-ManualGuide {
             $l.Add("1. **Home > Get Data > Text/CSV** → ``$($t.File)`` 선택 → **Open**.")
             $l.Add("2. 미리보기 창에서 **File Origin: $origin**, **Delimiter: $delimName** 인지 확인하고 **Transform Data**를 클릭합니다.")
         }
-        $l.Add("3. **Power Query Editor**에서 오른쪽 **Query Settings** 창의 **Name**을 ``$tn``으로 바꾼 뒤:")
+        $stepNo = if ($t.FilePattern) { 4 } else { 3 }
+        $l.Add("$stepNo. **Power Query Editor**에서 오른쪽 **Query Settings** 창의 **Name**을 ``$tn``으로 바꾼 뒤:")
         if ($t.HeaderRow -gt 1) { $l.Add("   - **Home > Remove Rows > Remove Top Rows** → **Number of rows: $($t.HeaderRow - 1)** → **OK**") }
         $l.Add('   - **Home > Use First Row as Headers** (첫 행이 이미 헤더면 생략)')
-        $l.Add('   - **Home > Choose Columns** → 다음 열만 체크: ' + (@($t.Columns | ForEach-Object { '`' + $_.Source + '`' }) -join ', '))
-        $renames = @($t.Columns | Where-Object { $_.Source -cne $_.Name })
+        $l.Add('   - **Home > Choose Columns** → 다음 열만 체크: ' + (@($srcCols | ForEach-Object { '`' + $_.Source + '`' }) -join ', '))
+        $renames = @($srcCols | Where-Object { $_.Source -cne $_.Name })
         if ($renames.Count -gt 0) { $l.Add('   - 열 이름 변경(열 헤더 더블클릭): ' + (@($renames | ForEach-Object { '`' + $_.Source + '` → `' + $_.Name + '`' }) -join ', ')) }
-        $l.Add('   - 데이터 형식(열 헤더 왼쪽의 형식 아이콘 클릭): ' + (@($t.Columns | ForEach-Object { '`' + $_.Name + '` → **' + $script:PqTypeNames[$_.Type] + '**' }) -join ', '))
+        $l.Add('   - 데이터 형식(열 헤더 왼쪽의 형식 아이콘 클릭): ' + (@($srcCols | ForEach-Object { '`' + $_.Name + '` → **' + $script:PqTypeNames[$_.Type] + '**' }) -join ', '))
+        foreach ($c in $compCols) {
+            $formula = 'Text.Combine({' + (@($c.Composite | ForEach-Object { 'Text.From([' + $_ + '])' }) -join ', ') + '}, "|")'
+            $l.Add("   - 복합 키 열 만들기: **Add Column > Custom Column** → **New column name** ``$($c.Name)``, **Custom column formula** ``= $formula`` → **OK** → 형식 **Text**. (관계는 열 하나끼리만 맺을 수 있어 " + ($c.Composite -join ' + ') + '를 합친 키가 필요합니다.)')
+        }
         $l.Add('')
     }
     $l.Add('4. 모든 테이블을 추가한 뒤 **Home > Close & Apply**를 클릭합니다.')

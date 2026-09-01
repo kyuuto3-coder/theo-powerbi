@@ -1,0 +1,43 @@
+{
+  "name": "AdvancedStar",
+  "locale": "ko-KR",
+  "autoDateTable": true,
+  "tables": [
+    { "name": "Orders", "filePattern": "orders_*.csv",
+      "columns": [
+        { "name": "order_id", "rename": "Order ID", "type": "int64", "key": true, "hidden": true },
+        { "name": "order_date", "rename": "Order Date", "type": "date" },
+        { "name": "cust_no", "rename": "Customer No", "type": "int64", "hidden": true },
+        { "name": "amount", "rename": "Amount", "type": "decimal", "format": "#,0.00" } ] },
+    { "name": "Customers", "file": "customers.csv",
+      "columns": [
+        { "name": "고객ID", "rename": "Customer ID", "type": "int64", "key": true, "hidden": true },
+        { "name": "고객명", "rename": "Customer Name", "type": "text" },
+        { "name": "등급", "rename": "Tier", "type": "text" } ] },
+    { "name": "SalesMonthly", "file": "sales_monthly.csv",
+      "columns": [
+        { "name": "월", "rename": "Month", "type": "int64", "summarizeBy": "none" },
+        { "name": "지역코드", "rename": "Region Code", "type": "int64", "summarizeBy": "none" },
+        { "name": "제품", "rename": "Product", "type": "text" },
+        { "name": "수량", "rename": "Quantity", "type": "int64" } ] },
+    { "name": "Targets", "file": "targets.csv",
+      "columns": [
+        { "name": "월", "rename": "Month", "type": "int64", "summarizeBy": "none" },
+        { "name": "지역코드", "rename": "Region Code", "type": "int64", "summarizeBy": "none" },
+        { "name": "목표", "rename": "Target", "type": "int64", "format": "#,0" } ] }
+  ],
+  "relationships": [
+    { "from": "Orders.Customer No", "to": "Customers.Customer ID" },
+    { "from": ["SalesMonthly.Month", "SalesMonthly.Region Code"], "to": ["Targets.Month", "Targets.Region Code"] }
+  ],
+  "measures": [
+    { "table": "Orders", "name": "Total Amount", "dax": "SUM(Orders[Amount])", "format": "#,0.00" },
+    { "table": "SalesMonthly", "name": "Total Quantity", "dax": "SUM(SalesMonthly[Quantity])", "format": "#,0" },
+    { "table": "Targets", "name": "Total Target", "dax": "SUM(Targets[Target])", "format": "#,0" }
+  ],
+  "pages": [ { "name": "Overview", "visuals": [
+    { "type": "card", "title": "Total Amount", "fields": { "Values": ["Orders.Total Amount"] }, "grid": [0, 0, 3, 2] },
+    { "type": "clusteredColumnChart", "title": "Amount by Tier", "fields": { "Category": ["Customers.Tier"], "Y": ["Orders.Total Amount"] }, "grid": [3, 0, 9, 4] },
+    { "type": "lineChart", "title": "Amount by Month", "fields": { "Category": ["Calendar.YearMonth"], "Y": ["Orders.Total Amount"] }, "grid": [0, 4, 6, 4] },
+    { "type": "clusteredBarChart", "title": "Quantity vs Target by Region", "fields": { "Category": ["Targets.Region Code"], "Y": ["SalesMonthly.Total Quantity", "Targets.Total Target"] }, "grid": [6, 4, 6, 4] } ] } ]
+}

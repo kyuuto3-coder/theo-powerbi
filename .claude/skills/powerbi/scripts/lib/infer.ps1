@@ -93,7 +93,7 @@ function Get-ColumnProfile {
     elseif ($type -in 'date', 'datetime') { if ($minD) { $min = $minD.ToString('yyyy-MM-dd'); $max = $maxD.ToString('yyyy-MM-dd') } }
     $nullPct = if ($n -gt 0) { [int][Math]::Round(100.0 * $counts.empty / $n) } else { 0 }
     return @{ Type = $type; NullPct = $nullPct; Distinct = $distinct.Count; Samples = $samples.ToArray(); Min = $min; Max = $max
-              IsUnique = ($nonEmpty -gt 0 -and $counts.empty -eq 0 -and $distinct.Count -eq $nonEmpty); NonEmpty = $nonEmpty }
+              IsUnique = ($nonEmpty -gt 0 -and $counts.empty -eq 0 -and $distinct.Count -eq $nonEmpty); NonEmpty = $nonEmpty; Values = $distinct }
 }
 
 function Test-DictionarySheet {
@@ -115,23 +115,135 @@ function Test-DictionarySheet {
 
 function Get-NormalizedName { param([string]$Name) return (($Name -replace '[^\p{L}\p{N}]', '').ToLowerInvariant()) }
 
+function ConvertTo-KeyString {
+    # Canonical string for cross-file value comparison: numbers via invariant 'R', dates as yyyy-MM-dd, text trimmed. $null for empty.
+    param($V)
+    $k = Get-ValueKind $V
+    switch ($k) {
+        'empty'  { return $null }
+        'number' { $d = if ($V -is [string]) { ConvertTo-NumberValue $V } else { [double]$V }; return $d.ToString('R', $script:Inv) }
+        'date'   { $dt = if ($V -is [datetime]) { $V } else { ConvertTo-DateValue $V }; return $dt.ToString('yyyy-MM-dd') }
+        default  { return ([string]$V).Trim() }
+    }
+}
+
+function Test-IdLikeName { param([string]$Name) return ($Name -match '(?i)(^id$|id$|_id|key$|code$|코드$|번호$|키$|no$|^sku|^pk_|_pk$)') }
+
+function Get-TypeGroup { param([string]$Type) if ($Type -in 'int64', 'double', 'decimal') { return 'number' }; if ($Type -in 'date', 'datetime') { return 'date' }; return $Type }
+
+function Get-TupleStrings {
+    # Joined key strings for each row over the given column indices (rows with any empty part are skipped).
+    param([Parameter(Mandatory)]$Rows, [Parameter(Mandatory)][int[]]$Indices)
+    $out = New-Object System.Collections.Generic.List[string]
+    foreach ($row in $Rows) {
+        $parts = New-Object System.Collections.Generic.List[string]; $ok = $true
+        foreach ($i in $Indices) { $v = if ($i -lt $row.Count) { ConvertTo-KeyString $row[$i] } else { $null }; if ($null -eq $v) { $ok = $false; break }; $parts.Add($v) }
+        if ($ok) { $out.Add(($parts -join '|')) }
+    }
+    return $out.ToArray()
+}
+
+function Find-CompositeKey {
+    # Smallest combination (2..MaxParts) of candidate column indices that is unique over the sampled rows. Returns int[] or $null.
+    param([Parameter(Mandatory)]$Rows, [Parameter(Mandatory)][int[]]$Candidates, [int]$MaxParts = 3)
+    $n = $Candidates.Count
+    if ($Rows.Count -lt 2 -or $n -lt 2) { return $null }
+    $combos = New-Object System.Collections.Generic.List[object]
+    for ($a = 0; $a -lt $n; $a++) { for ($b = $a + 1; $b -lt $n; $b++) { $combos.Add([int[]]@($Candidates[$a], $Candidates[$b])) } }
+    if ($MaxParts -ge 3) { for ($a = 0; $a -lt $n; $a++) { for ($b = $a + 1; $b -lt $n; $b++) { for ($c = $b + 1; $c -lt $n; $c++) { $combos.Add([int[]]@($Candidates[$a], $Candidates[$b], $Candidates[$c])) } } } }
+    foreach ($combo in $combos) {
+        $tuples = Get-TupleStrings -Rows $Rows -Indices $combo
+        if ($tuples.Count -lt [Math]::Max(2, [int]($Rows.Count * 0.9))) { continue }
+        $set = New-Object 'System.Collections.Generic.HashSet[string]'
+        $dup = $false
+        foreach ($t in $tuples) { if (-not $set.Add($t)) { $dup = $true; break } }
+        if (-not $dup) { return $combo }
+    }
+    return $null
+}
+
+function Get-Containment {
+    # Percent (0-100) of the sampled values that exist in the key set.
+    param([Parameter(Mandatory)][AllowEmptyCollection()]$Sample, [Parameter(Mandatory)]$Set)
+    $n = 0; $hit = 0
+    foreach ($v in $Sample) { if ($null -eq $v) { continue }; $n++; if ($Set.Contains($v)) { $hit++ } }
+    if ($n -eq 0) { return 0 }
+    return [int][Math]::Round(100.0 * $hit / $n)
+}
+
 function Find-KeyMatches {
-    # $Tables: @( @{ Name; Columns = @( @{ Name; IsUnique } ) } ). Returns strings "many.col -> one.col".
-    param([Parameter(Mandatory)]$Tables)
+    # $Tables: @( @{ Name; Rows (sampled data rows, object[] each); Columns = @( @{ Name; Index; Type; IsUnique; Values (HashSet of key strings) } ); CompositeKey = $null | @{ Indices; Names; Values (HashSet) } } )
+    # Returns strings: "many.col -> one.key  (NN% of M sampled values found[; names differ])"
+    param([Parameter(Mandatory)]$Tables, [int]$MinPercent = 90)
     $out = New-Object System.Collections.Generic.List[string]
     for ($a = 0; $a -lt $Tables.Count; $a++) {
+        $ta = $Tables[$a]
         for ($b = 0; $b -lt $Tables.Count; $b++) {
             if ($a -eq $b) { continue }
-            foreach ($ca in $Tables[$a].Columns) {
-                if ($ca.IsUnique) { continue }
-                foreach ($cb in $Tables[$b].Columns) {
-                    if (-not $cb.IsUnique) { continue }
-                    if ((Get-NormalizedName $ca.Name) -eq (Get-NormalizedName $cb.Name)) {
-                        $out.Add(("{0}.{1} -> {2}.{3}" -f $Tables[$a].Name, $ca.Name, $Tables[$b].Name, $cb.Name))
+            $tb = $Tables[$b]
+            foreach ($ca in $ta.Columns) {
+                if ($ca.IsUnique -or $ca.Values.Count -lt 2) { continue }
+                foreach ($cb in $tb.Columns) {
+                    if (-not $cb.IsUnique -or $cb.Name -eq '(unnamed)' -or $ca.Name -eq '(unnamed)') { continue }
+                    if ((Get-TypeGroup $ca.Type) -ne (Get-TypeGroup $cb.Type)) { continue }
+                    $sameName = ((Get-NormalizedName $ca.Name) -eq (Get-NormalizedName $cb.Name))
+                    # different names: only trust the value overlap when both names look like ids, or the key is not a tiny code range
+                    if (-not $sameName -and -not (((Test-IdLikeName $ca.Name) -and (Test-IdLikeName $cb.Name)) -or ($cb.Values.Count -ge 20 -and $ca.Values.Count -ge 5))) { continue }
+                    $pct = Get-Containment -Sample @($ca.Values) -Set $cb.Values
+                    if ($pct -ge $MinPercent -or ($sameName -and $pct -ge 50)) {
+                        $note = if ($sameName) { '' } else { '; names differ' }
+                        $out.Add(("{0}.{1} -> {2}.{3}  ({4}% of {5} sampled values found{6})" -f $ta.Name, $ca.Name, $tb.Name, $cb.Name, $pct, $ca.Values.Count, $note))
+                    }
+                }
+            }
+            if ($null -ne $tb.CompositeKey) {
+                # candidate tuple in A: for each part of B's key, a column of A with the same normalized name, else the best-containment column of the same type group
+                $idx = New-Object System.Collections.Generic.List[int]; $names = New-Object System.Collections.Generic.List[string]; $ok = $true
+                for ($p = 0; $p -lt $tb.CompositeKey.Names.Count; $p++) {
+                    $partName = $tb.CompositeKey.Names[$p]; $partCol = $tb.Columns | Where-Object { $_.Name -eq $partName } | Select-Object -First 1
+                    $match = $ta.Columns | Where-Object { (Get-NormalizedName $_.Name) -eq (Get-NormalizedName $partName) } | Select-Object -First 1
+                    if ($null -eq $match -and $null -ne $partCol) {
+                        $best = $null; $bestPct = 0
+                        foreach ($ca in $ta.Columns) { if ((Get-TypeGroup $ca.Type) -ne (Get-TypeGroup $partCol.Type) -or $idx.Contains($ca.Index)) { continue }; $pp = Get-Containment -Sample @($ca.Values) -Set $partCol.Values; if ($pp -gt $bestPct) { $bestPct = $pp; $best = $ca } }
+                        if ($bestPct -ge $MinPercent) { $match = $best }
+                    }
+                    if ($null -eq $match) { $ok = $false; break }
+                    $idx.Add($match.Index); $names.Add($match.Name)
+                }
+                if ($ok) {
+                    $tuples = Get-TupleStrings -Rows $ta.Rows -Indices $idx.ToArray()
+                    $pct = Get-Containment -Sample $tuples -Set $tb.CompositeKey.Values
+                    if ($pct -ge $MinPercent) {
+                        $out.Add(("{0}.({1}) -> {2}.({3})  ({4}% of {5} sampled rows found; composite key)" -f $ta.Name, ($names -join '+'), $tb.Name, ($tb.CompositeKey.Names -join '+'), $pct, $tuples.Count))
                     }
                 }
             }
         }
+    }
+    return $out.ToArray()
+}
+
+function Find-SameStructureGroups {
+    # $Tables: @( @{ Name; File; Sheet; Columns } ). Groups csv files / same-named sheets whose header signature is identical. Returns @( @{ Files; Sheet; Pattern } ).
+    param([Parameter(Mandatory)]$Tables)
+    $groups = @{}
+    foreach ($t in $Tables) {
+        $sig = (($t.Columns | ForEach-Object { Get-NormalizedName $_.Name }) -join '|') + '||' + [string]$t.Sheet
+        if (-not $groups.ContainsKey($sig)) { $groups[$sig] = New-Object System.Collections.Generic.List[object] }
+        $groups[$sig].Add($t)
+    }
+    $out = New-Object System.Collections.Generic.List[object]
+    foreach ($sig in $groups.Keys) {
+        $members = @($groups[$sig] | Sort-Object { $_.File })
+        $files = @($members | ForEach-Object { $_.File } | Select-Object -Unique)
+        if ($files.Count -lt 2) { continue }
+        $prefix = $files[0]; $suffix = $files[0]
+        foreach ($f in $files) {
+            while ($prefix.Length -gt 0 -and -not $f.StartsWith($prefix)) { $prefix = $prefix.Substring(0, $prefix.Length - 1) }
+            while ($suffix.Length -gt 0 -and -not $f.EndsWith($suffix)) { $suffix = $suffix.Substring(1) }
+        }
+        if ($prefix.Length + $suffix.Length -ge $files[0].Length) { $suffix = [IO.Path]::GetExtension($files[0]); $prefix = '' }
+        $out.Add(@{ Files = $files; Sheet = $members[0].Sheet; Pattern = ($prefix + '*' + $suffix) })
     }
     return $out.ToArray()
 }
