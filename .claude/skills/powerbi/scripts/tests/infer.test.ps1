@@ -144,6 +144,6 @@ Test-Case 'Find-KeyMatches: narrow-range ids are demoted to POSSIBLE with the re
     $dim  = @{ Name = 'DimEmployee'; Rows = @(); RowCount = 212; CompositeKey = $null; Columns = @( @{ Name = 'Employee Key'; Index = 0; Type = 'int64'; IsUnique = $true; Values = $emp; Min = 1; Max = 212 } ) }
     $cust = @{ Name = 'DimCustomer'; Rows = @(); RowCount = 50; CompositeKey = $null; Columns = @( @{ Name = 'Customer Key'; Index = 0; Type = 'int64'; IsUnique = $true; Values = $ck; Min = 1; Max = 50 } ) }
     $r = Find-KeyMatches -Tables @($fact, $dim, $cust) -IncludeWeak
-    Assert-Equal 1 $r.Strong.Count; Assert-Equal 1 $r.Weak.Count ($r.Weak -join ' | ')
-    Assert-Match 'values cover only 19% of the key range; names unrelated - confirm with the user' $r.Weak[0]
+    Assert-Equal 1 $r.Strong.Count; Assert-Equal 2 $r.Weak.Count ($r.Weak -join ' | ')
+    Assert-Match 'FactSale\.Salesperson Key -> DimEmployee\.Employee Key  \(100% of 18 sampled values found; values cover only 19% of the key range; names unrelated - confirm with the user' ($r.Weak -join "`n")
 }
