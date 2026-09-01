@@ -61,6 +61,7 @@ function Get-SpecModel {
     foreach ($t in (ConvertTo-Array (Get-Prop $Spec 'tables'))) {
         $name = [string](Get-Prop $t 'name' '')
         if (-not $name) { continue }
+        if ([string](Get-Prop $t 'from' '')) { continue }   # summary tables are built in a second pass, after their source exists
         $file = [string](Get-Prop $t 'file' '')
         $cols = New-Object System.Collections.Generic.List[object]
         foreach ($c in (ConvertTo-Array (Get-Prop $t 'columns'))) {
@@ -68,14 +69,66 @@ function Get-SpecModel {
             $final = [string](Get-Prop $c 'rename' $src); if (-not $final) { $final = $src }
             $type = [string](Get-Prop $c 'type' 'text')
             $key = [bool](Get-Prop $c 'key' $false)
+            $vmRaw = Get-Prop $c 'valueMap' $null
+            $vm = [ordered]@{}
+            if ($null -ne $vmRaw) {
+                if ($vmRaw -is [System.Collections.IDictionary]) { foreach ($k in $vmRaw.Keys) { $vm[[string]$k] = [string]$vmRaw[$k] } }
+                else { foreach ($pp in $vmRaw.PSObject.Properties) { $vm[[string]$pp.Name] = [string]$pp.Value } }
+            }
             $cols.Add(@{ Source = $src; Name = $final; Type = $type; Key = $key; Hidden = [bool](Get-Prop $c 'hidden' $false)
                          Format = (Get-Prop $c 'format' $null); SummarizeBy = [string](Get-Prop $c 'summarizeBy' (Get-DefaultSummarize $type $key))
-                         Description = (Get-Prop $c 'description' $null); SortBy = (Get-Prop $c 'sortBy' $null) })
+                         Description = (Get-Prop $c 'description' $null); SortBy = (Get-Prop $c 'sortBy' $null)
+                         Trim = [bool](Get-Prop $c 'trim' $false); Case = (Get-Prop $c 'case' $null)
+                         NullValues = @(ConvertTo-Array (Get-Prop $c 'nullValues') | ForEach-Object { [string]$_ })
+                         DateFormats = @(ConvertTo-Array (Get-Prop $c 'dateFormats') | ForEach-Object { [string]$_ })
+                         ValueMap = $vm; NumberClean = [bool](Get-Prop $c 'numberClean' $false); FillDown = [bool](Get-Prop $c 'fillDown' $false)
+                         ValidRange = @(ConvertTo-Array (Get-Prop $c 'validRange')) })
+        }
+        $derived = New-Object System.Collections.Generic.List[object]
+        foreach ($d in (ConvertTo-Array (Get-Prop $t 'derived'))) {
+            $dnm = [string](Get-Prop $d 'name' ''); if (-not $dnm) { continue }
+            $dty = [string](Get-Prop $d 'type' 'double')
+            $derived.Add(@{ Name = $dnm; Expr = [string](Get-Prop $d 'expr' ''); Type = $dty })
+            $cols.Add(@{ Source = $null; Name = $dnm; Type = $dty; Key = $false; Hidden = [bool](Get-Prop $d 'hidden' $false)
+                         Format = (Get-Prop $d 'format' $null); SummarizeBy = [string](Get-Prop $d 'summarizeBy' (Get-DefaultSummarize $dty $false))
+                         Description = (Get-Prop $d 'description' $null); SortBy = $null })
         }
         $pattern = [string](Get-Prop $t 'filePattern' '')
+        $cleanRaw = Get-Prop $t 'clean' $null
+        $dbRaw = Get-Prop $cleanRaw 'dedupeBy' $null
+        $dedupeBy = $null
+        if ($null -ne $dbRaw) { $dedupeBy = @{ KeyCols = @(ConvertTo-Array (Get-Prop $dbRaw 'keys') | ForEach-Object { [string]$_ }); Keep = [string](Get-Prop $dbRaw 'keep' 'first'); OrderBy = [string](Get-Prop $dbRaw 'orderBy' '') } }
         $tables[$name] = @{ Name = $name; File = $file; FilePattern = $pattern; Sheet = (Get-Prop $t 'sheet' $null); HeaderRow = [int](Get-Prop $t 'headerRow' 1)
                             Encoding = [int](Get-Prop $t 'encoding' 65001); Delimiter = [string](Get-Prop $t 'delimiter' ',')
-                            IsXlsx = (($file + $pattern) -match '(?i)\.xls[xm]$'); Columns = $cols.ToArray(); Measures = @(); IsCalculated = $false }
+                            IsXlsx = (($file + $pattern) -match '(?i)\.xls[xm]$'); Columns = $cols.ToArray(); Measures = @(); IsCalculated = $false
+                            Derived = $derived.ToArray(); From = ''; GroupBy = @(); Aggs = @()
+                            Clean = @{ RemoveBlankRows = [bool](Get-Prop $cleanRaw 'removeBlankRows' $false); DropDuplicates = [bool](Get-Prop $cleanRaw 'dropDuplicates' $false); ErrorsToNull = [bool](Get-Prop $cleanRaw 'errorsToNull' $false); DedupeBy = $dedupeBy } }
+    }
+    # second pass: summary tables (from/groupBy/aggregations) - their columns are derived from the source table
+    foreach ($t in (ConvertTo-Array (Get-Prop $Spec 'tables'))) {
+        $from = [string](Get-Prop $t 'from' ''); if (-not $from) { continue }
+        $name = [string](Get-Prop $t 'name' ''); if (-not $name -or -not $tables.Contains($from)) { continue }
+        $srcT = $tables[$from]
+        $gcols = New-Object System.Collections.Generic.List[object]
+        $groupBy = @(ConvertTo-Array (Get-Prop $t 'groupBy') | ForEach-Object { [string]$_ })
+        foreach ($gn in $groupBy) {
+            $sc = $srcT.Columns | Where-Object { $_.Name -eq $gn } | Select-Object -First 1
+            $gty = if ($sc) { $sc.Type } else { 'text' }
+            $gcols.Add(@{ Source = $null; Name = $gn; Type = $gty; Key = $false; Hidden = $false; Format = $null; SummarizeBy = 'none'; Description = $null; SortBy = $null })
+        }
+        $aggs = New-Object System.Collections.Generic.List[object]
+        foreach ($a in (ConvertTo-Array (Get-Prop $t 'aggregations'))) {
+            $an = [string](Get-Prop $a 'name' ''); if (-not $an) { continue }
+            $agg = [string](Get-Prop $a 'agg' 'count'); $acol = [string](Get-Prop $a 'column' '')
+            $sc = $srcT.Columns | Where-Object { $_.Name -eq $acol } | Select-Object -First 1
+            $aty = if ($agg -in 'count', 'countDistinct') { 'int64' } elseif ($agg -eq 'average') { 'double' } elseif ($sc) { $sc.Type } else { 'double' }
+            $aggs.Add(@{ Name = $an; Agg = $agg; Column = $acol; Type = $aty })
+            $gcols.Add(@{ Source = $null; Name = $an; Type = $aty; Key = $false; Hidden = $false; Format = (Get-Prop $a 'format' $null); SummarizeBy = [string](Get-DefaultSummarize $aty $false); Description = $null; SortBy = $null })
+        }
+        $tables[$name] = @{ Name = $name; File = $null; FilePattern = ''; Sheet = $null; HeaderRow = 1; Encoding = 65001; Delimiter = ','; IsXlsx = $false
+                            Columns = $gcols.ToArray(); Measures = @(); IsCalculated = $false
+                            Derived = @(); From = $from; GroupBy = $groupBy; Aggs = $aggs.ToArray()
+                            Clean = @{ RemoveBlankRows = $false; DropDuplicates = $false; ErrorsToNull = $false; DedupeBy = $null } }
     }
     foreach ($m in (ConvertTo-Array (Get-Prop $Spec 'measures'))) {
         $tn = [string](Get-Prop $m 'table' '')
@@ -166,6 +219,7 @@ function Get-SpecValidation {
         if ($tn -eq 'Calendar') { $errors.Add("$p.name: 'Calendar' is reserved for the auto date table") }
         if ($tn.Contains('.')) { $errors.Add("$p.name: table names may not contain '.'") }
         if ($seenTables.ContainsKey($tn)) { $errors.Add("$p.name: duplicate table name '$tn'") }; $seenTables[$tn] = $true
+        if ([string](Get-Prop $t 'from' '')) { continue }   # summary tables are validated after the model is built
         $file = [string](Get-Prop $t 'file' ''); $pattern = [string](Get-Prop $t 'filePattern' '')
         if (-not $file -and -not $pattern) { $errors.Add("$p.file: required (or filePattern)") }
         elseif ($file -and $pattern) { $errors.Add("${p}: use either file or filePattern, not both") }
@@ -188,9 +242,71 @@ function Get-SpecValidation {
             if ($script:AllowedTypes -notcontains $type) { $errors.Add("$cp.type: '$type' is not one of $($script:AllowedTypes -join '|')") }
             $sb = Get-Prop $c 'summarizeBy' $null
             if ($null -ne $sb -and $script:AllowedSummarize -notcontains [string]$sb) { $errors.Add("$cp.summarizeBy: '$sb' is not one of $($script:AllowedSummarize -join '|')") }
+            $case = Get-Prop $c 'case' $null
+            if ($null -ne $case -and @('upper', 'lower') -notcontains [string]$case) { $errors.Add("$cp.case: '$case' is not one of upper|lower") }
+            if (@(ConvertTo-Array (Get-Prop $c 'dateFormats')).Count -gt 0 -and $type -notin 'date', 'datetime') { $errors.Add("$cp.dateFormats: only valid for date/datetime columns") }
+            $vr = @(ConvertTo-Array (Get-Prop $c 'validRange'))
+            if ($vr.Count -gt 0) {
+                if ($vr.Count -ne 2) { $errors.Add("$cp.validRange: must be [min, max]") }
+                elseif ($type -notin 'int64', 'double', 'decimal') { $errors.Add("$cp.validRange: only valid for numeric columns") }
+                elseif ([double]$vr[0] -gt [double]$vr[1]) { $errors.Add("$cp.validRange: min > max") }
+            }
+        }
+        $derRaw = ConvertTo-Array (Get-Prop $t 'derived')
+        for ($di = 0; $di -lt $derRaw.Count; $di++) {
+            $d = $derRaw[$di]; $dp = "$p.derived[$di]"
+            $dnm = [string](Get-Prop $d 'name' '')
+            if (-not $dnm) { $errors.Add("$dp.name: required"); continue }
+            if ($seenCols.ContainsKey($dnm)) { $errors.Add("$dp.name: '$dnm' collides with a column name") }; $seenCols[$dnm] = $true
+            if (-not [string](Get-Prop $d 'expr' '')) { $errors.Add("$dp.expr: required (an M expression over renamed columns, e.g. [Adults] + [Children])") }
+            $dty = [string](Get-Prop $d 'type' 'double')
+            if ($script:AllowedTypes -notcontains $dty) { $errors.Add("$dp.type: '$dty' is not one of $($script:AllowedTypes -join '|')") }
+        }
+        $cleanRaw = Get-Prop $t 'clean' $null
+        if ($null -ne $cleanRaw) {
+            $cleanProps = if ($cleanRaw -is [System.Collections.IDictionary]) { @($cleanRaw.Keys) } else { @($cleanRaw.PSObject.Properties.Name) }
+            foreach ($prop in $cleanProps) { if ($prop -notin 'removeBlankRows', 'dropDuplicates', 'errorsToNull', 'dedupeBy') { $errors.Add("$p.clean.${prop}: unknown option (use removeBlankRows|dropDuplicates|errorsToNull|dedupeBy)") } }
+            $dbRaw = Get-Prop $cleanRaw 'dedupeBy' $null
+            if ($null -ne $dbRaw) {
+                $dbKeys = @(ConvertTo-Array (Get-Prop $dbRaw 'keys') | ForEach-Object { [string]$_ })
+                if ($dbKeys.Count -eq 0) { $errors.Add("$p.clean.dedupeBy.keys: required (renamed column names)") }
+                foreach ($dk in $dbKeys) { if (-not $seenCols.ContainsKey($dk)) { $errors.Add("$p.clean.dedupeBy.keys: unknown column '$dk'") } }
+                $keep = [string](Get-Prop $dbRaw 'keep' 'first')
+                if ($keep -notin 'first', 'last', 'mostComplete') { $errors.Add("$p.clean.dedupeBy.keep: '$keep' is not one of first|last|mostComplete") }
+                $ob = [string](Get-Prop $dbRaw 'orderBy' '')
+                if ($keep -in 'first', 'last') {
+                    if (-not $ob) { $errors.Add("$p.clean.dedupeBy.orderBy: required for keep=first|last (the column that decides which row wins)") }
+                    elseif (-not $seenCols.ContainsKey($ob)) { $errors.Add("$p.clean.dedupeBy.orderBy: unknown column '$ob'") }
+                }
+            }
         }
     }
     $model = Get-SpecModel -Spec $Spec
+    # summary tables (from/groupBy/aggregations)
+    for ($ti = 0; $ti -lt $tablesRaw.Count; $ti++) {
+        $t = $tablesRaw[$ti]; $p = "tables[$ti]"
+        $from = [string](Get-Prop $t 'from' ''); if (-not $from) { continue }
+        foreach ($bad in 'file', 'filePattern', 'columns', 'clean', 'derived') { if ($null -ne (Get-Prop $t $bad $null)) { $errors.Add("$p.${bad}: not allowed on a summary table (it inherits the cleaned source)") } }
+        if (-not $model.Tables.Contains($from)) { $errors.Add("$p.from: unknown table '$from'"); continue }
+        if ($model.Tables[$from].From) { $errors.Add("$p.from: '$from' is itself a summary table; group a file table instead"); continue }
+        $srcCols = @{}; foreach ($c in $model.Tables[$from].Columns) { $srcCols[$c.Name] = $true }
+        $groupBy = @(ConvertTo-Array (Get-Prop $t 'groupBy') | ForEach-Object { [string]$_ })
+        if ($groupBy.Count -eq 0) { $errors.Add("$p.groupBy: at least one grouping column is required") }
+        foreach ($g in $groupBy) { if (-not $srcCols.ContainsKey($g)) { $errors.Add("$p.groupBy: unknown column '$g' in '$from' (use renamed names)") } }
+        $aggsRaw = ConvertTo-Array (Get-Prop $t 'aggregations')
+        if ($aggsRaw.Count -eq 0) { $errors.Add("$p.aggregations: at least one aggregation is required") }
+        for ($ai = 0; $ai -lt $aggsRaw.Count; $ai++) {
+            $a = $aggsRaw[$ai]; $ap = "$p.aggregations[$ai]"
+            if (-not [string](Get-Prop $a 'name' '')) { $errors.Add("$ap.name: required") }
+            $agg = [string](Get-Prop $a 'agg' 'count')
+            if ($agg -notin 'count', 'countDistinct', 'sum', 'average', 'min', 'max') { $errors.Add("$ap.agg: '$agg' is not one of count|countDistinct|sum|average|min|max") }
+            $acol = [string](Get-Prop $a 'column' '')
+            if ($agg -ne 'count') {
+                if (-not $acol) { $errors.Add("$ap.column: required for agg=$agg") }
+                elseif (-not $srcCols.ContainsKey($acol)) { $errors.Add("$ap.column: unknown column '$acol' in '$from' (use renamed names)") }
+            }
+        }
+    }
     $measuresRaw = ConvertTo-Array (Get-Prop $Spec 'measures')
     $seenMeasures = @{}
     for ($mi = 0; $mi -lt $measuresRaw.Count; $mi++) {

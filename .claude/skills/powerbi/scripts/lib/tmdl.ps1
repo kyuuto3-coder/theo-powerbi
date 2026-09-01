@@ -23,8 +23,11 @@ function Get-MReader {
 }
 
 function New-MQuery {
-    # Returns the M query as an array of lines (unindented). Steps: Source → (Skip) → Promoted → Selected → (Renamed) → Typed → (composite key columns).
-    param([Parameter(Mandatory)]$Table)
+    # Returns the M query as an array of lines (unindented).
+    # Pipeline: Source → (Skip) → Promoted → Selected → (NoBlankRows) → (Renamed) → (Cleaned) → (FilledDown) → (FixedDates) → Typed → (NoErrors) → (ValidRange) → (Deduped) → (DedupedByKey) → (Derived) → (Grouped) → (composite keys)
+    param([Parameter(Mandatory)]$Table, $Model = $null)
+    $outTable = $Table
+    if ($outTable.From -and $Model) { $Table = $Model.Tables[$outTable.From] }   # summary table: build the source table's full pipeline, then group it
     $steps = New-Object System.Collections.Generic.List[object]   # @( @{ Name; Expr } )
     $src = @($Table.Columns | Where-Object { $null -ne $_.Source })
     $comp = @($Table.Columns | Where-Object { $null -eq $_.Source -and $_.Composite })
@@ -47,12 +50,106 @@ function New-MQuery {
     $sel = @($src | ForEach-Object { ConvertTo-MString $_.Source }) -join ', '
     $steps.Add(@{ Name = 'Selected'; Expr = 'Table.SelectColumns(Promoted, {' + $sel + '})' })
     $prev = 'Selected'
+    $clean = $Table.Clean
+    if ($clean -and $clean.RemoveBlankRows) {
+        $steps.Add(@{ Name = 'NoBlankRows'; Expr = 'Table.SelectRows(' + $prev + ', each not List.AllTrue(List.Transform(Record.FieldValues(_), each _ = null or Text.Trim(Text.From(_)) = "")))' }); $prev = 'NoBlankRows'
+    }
     # -cne: M is case-sensitive, so a case-only rename (price -> Price) must still be emitted
     $renames = @($src | Where-Object { $_.Source -cne $_.Name } | ForEach-Object { '{' + (ConvertTo-MString $_.Source) + ', ' + (ConvertTo-MString $_.Name) + '}' })
-    if ($renames.Count -gt 0) { $steps.Add(@{ Name = 'Renamed'; Expr = 'Table.RenameColumns(Selected, {' + ($renames -join ', ') + '})' }); $prev = 'Renamed' }
+    if ($renames.Count -gt 0) { $steps.Add(@{ Name = 'Renamed'; Expr = 'Table.RenameColumns(' + $prev + ', {' + ($renames -join ', ') + '})' }); $prev = 'Renamed' }
+    # per-column value cleaning (trim / case / nullValues / valueMap / numberClean) - runs before typing, while every value is still text
+    $txtClean = @($src | Where-Object { $_.Trim -or $_.Case -or $_.NumberClean -or $_.FillDown -or (@($_.NullValues).Count -gt 0) -or ($_.ValueMap -and $_.ValueMap.Count -gt 0) })
+    if ($txtClean.Count -gt 0) {
+        $ops = @($txtClean | ForEach-Object {
+            $base = 'Text.From(_)'
+            if ($_.Trim -or $_.NumberClean) { $base = 'Text.Trim(' + $base + ')' }
+            if ($_.Case -eq 'upper') { $base = 'Text.Upper(' + $base + ')' } elseif ($_.Case -eq 'lower') { $base = 'Text.Lower(' + $base + ')' }
+            $lets = New-Object System.Collections.Generic.List[string]
+            $lets.Add('t0 = ' + $base); $cur = 't0'
+            if ($_.FillDown) { $lets.Add('t1 = if ' + $cur + ' = "" then null else ' + $cur); $cur = 't1' }   # FillDown fills nulls, so empties must become null first
+            if (@($_.NullValues).Count -gt 0) { $lets.Add('t2 = if ' + $cur + ' = null then null else if List.Contains({' + (@($_.NullValues | ForEach-Object { ConvertTo-MString ([string]$_) }) -join ', ') + '}, ' + $cur + ') then null else ' + $cur); $cur = 't2' }
+            if ($_.ValueMap -and $_.ValueMap.Count -gt 0) {
+                $rec = @($_.ValueMap.GetEnumerator() | ForEach-Object { '#' + (ConvertTo-MString ([string]$_.Key)) + ' = ' + (ConvertTo-MString ([string]$_.Value)) }) -join ', '
+                $lets.Add('t3 = if ' + $cur + ' = null then null else Record.FieldOrDefault([' + $rec + '], ' + $cur + ', ' + $cur + ')'); $cur = 't3'
+            }
+            if ($_.NumberClean) {
+                $lets.Add('t4 = if ' + $cur + ' = null then null else let s = ' + $cur + ', neg = Text.StartsWith(s, "(") and Text.EndsWith(s, ")"), c = Text.Remove(s, {"₩", "$", "€", "£", "¥", ",", "(", ")", " "}), p = Text.EndsWith(c, "%"), v = try Number.FromText(if p then Text.TrimEnd(c, "%") else c) otherwise null in if v = null then null else (if neg then -v else v) * (if p then 0.01 else 1)'); $cur = 't4'
+            }
+            '{' + (ConvertTo-MString $_.Name) + ', each if _ = null then null else let ' + ($lets -join ', ') + ' in ' + $cur + '}'
+        })
+        $steps.Add(@{ Name = 'Cleaned'; Expr = 'Table.TransformColumns(' + $prev + ', {' + ($ops -join ', ') + '})' }); $prev = 'Cleaned'
+    }
+    $fillCols = @($src | Where-Object { $_.FillDown })
+    if ($fillCols.Count -gt 0) { $steps.Add(@{ Name = 'FilledDown'; Expr = 'Table.FillDown(' + $prev + ', {' + (@($fillCols | ForEach-Object { ConvertTo-MString $_.Name }) -join ', ') + '})' }); $prev = 'FilledDown' }
+    # mixed date formats: try the default parse, then each declared format; anything else becomes null
+    $dateClean = @($src | Where-Object { @($_.DateFormats).Count -gt 0 })
+    if ($dateClean.Count -gt 0) {
+        $ops = @($dateClean | ForEach-Object {
+            $fn = if ($_.Type -eq 'datetime') { 'DateTime.FromText' } else { 'Date.FromText' }
+            $expr = 'try ' + $fn + '(s) otherwise '
+            foreach ($f in @($_.DateFormats)) { $expr += 'try ' + $fn + '(s, [Format=' + (ConvertTo-MString ([string]$f)) + ']) otherwise ' }
+            $expr += 'null'
+            '{' + (ConvertTo-MString $_.Name) + ', each if _ = null then null else let s = Text.Trim(Text.From(_)) in if s = "" then null else ' + $expr + '}'
+        })
+        $steps.Add(@{ Name = 'FixedDates'; Expr = 'Table.TransformColumns(' + $prev + ', {' + ($ops -join ', ') + '})' }); $prev = 'FixedDates'
+    }
     $types = @($src | ForEach-Object { '{' + (ConvertTo-MString $_.Name) + ', ' + (Get-MType $_.Type) + '}' }) -join ', '
     $steps.Add(@{ Name = 'Typed'; Expr = 'Table.TransformColumnTypes(' + $prev + ', {' + $types + '})' })
-    $prev = 'Typed'; $n = 0
+    $prev = 'Typed'
+    if ($clean -and $clean.ErrorsToNull) {
+        $pairs = @($src | ForEach-Object { '{' + (ConvertTo-MString $_.Name) + ', null}' }) -join ', '
+        $steps.Add(@{ Name = 'NoErrors'; Expr = 'Table.ReplaceErrorValues(' + $prev + ', {' + $pairs + '})' }); $prev = 'NoErrors'
+    }
+    # out-of-range numeric values become null (post-typing)
+    $rangeCols = @($src | Where-Object { @($_.ValidRange).Count -eq 2 })
+    if ($rangeCols.Count -gt 0) {
+        $ops = @($rangeCols | ForEach-Object {
+            $lo = ([double]$_.ValidRange[0]).ToString('R', [Globalization.CultureInfo]::InvariantCulture); $hi = ([double]$_.ValidRange[1]).ToString('R', [Globalization.CultureInfo]::InvariantCulture)
+            '{' + (ConvertTo-MString $_.Name) + ', each if _ = null then null else if _ < ' + $lo + ' or _ > ' + $hi + ' then null else _}'
+        })
+        $steps.Add(@{ Name = 'ValidRange'; Expr = 'Table.TransformColumns(' + $prev + ', {' + ($ops -join ', ') + '})' }); $prev = 'ValidRange'
+    }
+    if ($clean -and $clean.DropDuplicates) {
+        $steps.Add(@{ Name = 'Deduped'; Expr = 'Table.Distinct(' + $prev + ')' }); $prev = 'Deduped'
+    }
+    # key-level dedupe: rows that share a key but differ are resolved by rule, not dropped blindly
+    if ($clean -and $clean.DedupeBy) {
+        $db = $clean.DedupeBy
+        $keyList = '{' + (@($db.KeyCols | ForEach-Object { ConvertTo-MString ([string]$_) }) -join ', ') + '}'
+        if ($db.Keep -eq 'mostComplete') {
+            $steps.Add(@{ Name = 'Scored'; Expr = 'Table.AddColumn(' + $prev + ', "_nonNulls", each List.NonNullCount(Record.FieldValues(_)), Int64.Type)' })
+            $steps.Add(@{ Name = 'DedupedByKey0'; Expr = 'Table.Distinct(Table.Buffer(Table.Sort(Scored, {{"_nonNulls", Order.Descending}})), ' + $keyList + ')' })
+            $steps.Add(@{ Name = 'DedupedByKey'; Expr = 'Table.RemoveColumns(DedupedByKey0, {"_nonNulls"})' }); $prev = 'DedupedByKey'
+        } else {
+            $dir = if ($db.Keep -eq 'last') { 'Order.Descending' } else { 'Order.Ascending' }
+            $steps.Add(@{ Name = 'DedupedByKey'; Expr = 'Table.Distinct(Table.Buffer(Table.Sort(' + $prev + ', {{' + (ConvertTo-MString ([string]$db.OrderBy)) + ', ' + $dir + '}})), ' + $keyList + ')' }); $prev = 'DedupedByKey'
+        }
+    }
+    # derived columns (M expressions over the typed, cleaned data)
+    $dn = 0
+    foreach ($d in @($Table.Derived)) {
+        $dn++
+        $steps.Add(@{ Name = "Derived$dn"; Expr = 'Table.AddColumn(' + $prev + ', ' + (ConvertTo-MString $d.Name) + ', each ' + $d.Expr + ', ' + (Get-MType $d.Type) + ')' }); $prev = "Derived$dn"
+    }
+    # summary table: group the source pipeline to the declared granularity
+    if ($outTable.From) {
+        $keys = @($outTable.GroupBy | ForEach-Object { ConvertTo-MString ([string]$_) }) -join ', '
+        $aggList = @($outTable.Aggs | ForEach-Object {
+            $fld = '[#' + (ConvertTo-MString ([string]$_.Column)) + ']'
+            $inner = switch ([string]$_.Agg) {
+                'count'         { 'Table.RowCount(_)' }
+                'countDistinct' { 'List.Count(List.Distinct(' + $fld + '))' }
+                'sum'           { 'List.Sum(' + $fld + ')' }
+                'average'       { 'List.Average(' + $fld + ')' }
+                'min'           { 'List.Min(' + $fld + ')' }
+                'max'           { 'List.Max(' + $fld + ')' }
+            }
+            '{' + (ConvertTo-MString $_.Name) + ', each ' + $inner + ', ' + (Get-MType $_.Type) + '}'
+        }) -join ', '
+        $steps.Add(@{ Name = 'Grouped'; Expr = 'Table.Group(' + $prev + ', {' + $keys + '}, {' + $aggList + '})' }); $prev = 'Grouped'
+        $comp = @()   # composite key columns belong to the source table, not the summary
+    }
+    $n = 0
     foreach ($c in $comp) {
         $n++
         $combine = 'Text.Combine({' + (@($c.Composite | ForEach-Object { 'Text.From([' + $_ + '])' }) -join ', ') + '}, "|")'
@@ -128,7 +225,7 @@ function New-TableTmdl {
         $l.Add("`tpartition " + (Format-TmdlName $Table.Name) + " = m")
         $l.Add("`t`tmode: import")
         $l.Add("`t`tsource =")
-        foreach ($line in (New-MQuery -Table $Table)) { $l.Add("`t`t`t`t" + $line) }
+        foreach ($line in (New-MQuery -Table $Table -Model $Model)) { $l.Add("`t`t`t`t" + $line) }
     }
     $l.Add('')
     return ($l -join "`r`n")
