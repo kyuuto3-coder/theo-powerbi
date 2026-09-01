@@ -1,0 +1,17 @@
+# coworker-owned folders: never committed
+rawdata/*
+!rawdata/.gitkeep
+output/*
+!output/.gitkeep
+
+# local Claude Code / MCP settings
+.mcp.json
+.claude/settings.local.json
+
+# Power BI Desktop caches
+**/.pbi/localSettings.json
+**/.pbi/cache.abf
+
+# OS
+.DS_Store
+Thumbs.db
